@@ -12,15 +12,75 @@ def ada_case(name: str) -> str:
     # TODO handle cases where name isn't snake_case
     return name.title()
 
+ASCII_CHARACTERS = {
+    "\x00": "ASCII.NUL",
+    "\x01": "ASCII.SOH",
+    "\x02": "ASCII.STX",
+    "\x03": "ASCII.ETX",
+    "\x04": "ASCII.EOT",
+    "\x05": "ASCII.ENQ",
+    "\x06": "ASCII.ACK",
+    "\x07": "ASCII.BEL",
+    "\x08": "ASCII.BS",
+    "\x09": "ASCII.HT",
+    "\x0a": "ASCII.LF",
+    "\x0b": "ASCII.VT",
+    "\x0c": "ASCII.FF",
+    "\x0d": "ASCII.CR",
+    "\x0e": "ASCII.SO",
+    "\x0f": "ASCII.SI",
+    "\x10": "ASCII.DLE",
+    "\x11": "ASCII.DC1",
+    "\x12": "ASCII.DC2",
+    "\x13": "ASCII.DC3",
+    "\x14": "ASCII.DC4",
+    "\x15": "ASCII.NAK",
+    "\x16": "ASCII.SYN",
+    "\x17": "ASCII.ETB",
+    "\x18": "ASCII.CAN",
+    "\x19": "ASCII.EM",
+    "\x1a": "ASCII.SUB",
+    "\x1b": "ASCII.ESC",
+    "\x1c": "ASCII.FS",
+    "\x1d": "ASCII.GS",
+    "\x1e": "ASCII.RS",
+    "\x1f": "ASCII.US",
+    "\x7f": "ASCII.DEL",
+}
+
+def python_string_to_ada_string(s: str) -> str:
+    # TODO figure out WTF to do with UTF-8
+    s = s.replace('"', '""')
+    for c in ASCII_CHARACTERS:
+        s.replace(c, f'" & {ASCII_CHARACTERS[c]} & "')
+    return s
+
+
+class TranslationDesignError(Exception):
+    pass
 
 
 class Translator(LanguageTranslator[TargetExp]):
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.subprogram_name = None
+
     def gen_literal(self, c: bool | str | int | float | None) -> TargetExp:
         """
         Translate a literal expression
         c: is the literal value
         """
-        return "TODO"
+        match c:
+            case bool() | int() | float():
+                return str(c)
+            case str():
+                return python_string_to_ada_string(c)
+            case None:
+                return "null"
+            case _:
+                raise TranslationDesignError(f"Unhandled expression: {c}")
+
 
     def gen_var(self, v: str) -> TargetExp:
         """
@@ -88,6 +148,8 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         The list of stop tokens for this language
         """
+        if self.subprogram_name is None:
+            raise TranslationDesignError("subprogram_name should never be None")
         return [f"end {self.subprogram_name};"]
 
     def no_completion_prompt_stub(self) -> str:
@@ -99,6 +161,8 @@ class Translator(LanguageTranslator[TargetExp]):
         }
         
         """
+        if self.subprogram_name is None:
+            raise TranslationDesignError("subprogram_name should never be None")
         return f"end {self.subprogram_name};"
 
 
