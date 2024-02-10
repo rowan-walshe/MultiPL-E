@@ -4,9 +4,11 @@ import ast
 import re
 
 from base_language_translator import LanguageTranslator
-
+from humaneval_to_cpp import DOCSTRING_LINESTART_RE
 
 TargetExp = str
+
+ADA_MAIN_NAME = "Main"
 
 ADA_KEYWORDS = {"abort", "abs", "abstract", "accept", "access", "aliased", "all", "and", "array", "at", "begin", "body", "case", "constant", "declare", "delay", "delta", "digits", "do", "else", "elsif", "end", "entry", "exception", "exit", "for", "function", "generic", "goto", "if", "in", "interface", "is", "limited", "loop", "mod", "new", "not", "null", "of", "or", "others", "out", "overriding", "package", "pragma", "private", "procedure", "protected", "raise", "range", "record", "rem", "renames", "requeue", "return", "reverse", "select", "separate", "some", "subtype", "synchronized", "tagged", "task", "terminate", "then", "type", "until", "use", "when", "while", "with", "xor",}
 
@@ -76,7 +78,68 @@ class Translator(LanguageTranslator[TargetExp]):
 
     def __init__(self) -> None:
         super().__init__()
+        self.reinit()
+        super().__init__()
+        self.string_type = "String"
+        self.float_type = "Float"
+        self.int_type = "Integer"
+        self.bool_type = "Boolean"
+        # self.none_type = "Optional.empty()" # TODO figure out None types
+        self.array_type = "Array"
+        # self.list_type = "ArrayList"  # TODO figure out Vector vs Array, and handling non-fixed length elements e.g. Strings
+        # self.tuple_type = "Pair"  # TODO figure out Tuple
+        # self.dict_type = "HashMap"  # TODO figure out dict
+        # self.optional_type = "Optional"  # TODO figure out. Variant record?
+        self.any_type = "Object"  # TODO cry
+        self.indent = ' ' * 3
+
+    def reinit(self) -> None:
         self.subprogram_name = None
+
+    def translate_pytype(self, ann: ast.expr | None) -> str:
+        """Traverses an AST annotation and translate Python type annotation to an Ada Type"""
+
+        if ann == None:
+            raise Exception(f"No annotation")
+
+        # Todo add missing Set type
+        match ann:
+            case ast.Name(id="str"):
+                return self.string_type
+            case ast.Name(id="int"):
+                return self.int_type
+            case ast.Name(id="float"):
+                return self.float_type
+            case ast.Name(id="bool"):
+                return self.bool_type
+            case ast.Name(id="None"):
+                #It appears None is always used in optional
+                raise Exception("Not implemented")
+            case ast.List(elts=elts):
+                raise Exception("Not implemented")
+            case ast.Tuple(elts=elts):
+                raise Exception("Not implemented")
+            case ast.Dict(keys=k,values=v):
+                raise Exception("Not implemented")
+            case ast.Subscript(value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)):
+                raise Exception("Not implemented")
+            case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
+                raise Exception("Not implemented")
+            case ast.Subscript(value=ast.Name(id="Tuple"), slice=elts):
+                raise Exception("Not implemented")
+            case ast.Subscript(value=ast.Name(id="Optional"), slice=elem_type):
+                raise Exception("Not implemented")
+            case ast.Subscript(value=ast.Name(id="Union"), slice=ast.Tuple(elts=elems)):
+                raise Exception("Not implemented")
+            case ast.Name(id="Any"):
+                raise Exception("Not implemented")
+            case ast.Constant(value=None):
+                raise Exception("Not implemented")
+            case ast.Constant(value=Ellipsis):
+                raise Exception("Translator do not support translating Ellipsis")
+            case _other:
+                print(f"Unhandled annotation: {ast.dump(ann)}")
+                raise Exception(f"Unhandled annotation: {ann}")
 
     def gen_literal(self, c: bool | str | int | float | None) -> TargetExp:
         """
@@ -126,12 +189,33 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         return "TODO"
 
+    def package_imports(self) -> str:
+        # TODO handle cases where more imports are needed e.g. vector/hashmap
+        return '\n'.join([
+            "with Ada.Assertions; use Ada.Assertions;",
+        ]) + '\n'
+
     def translate_prompt(self, name: str, args: List[ast.arg], returns: ast.expr, description: str) -> str:
         """
         Translate Python prompt.
         """
+        self.reinit()
+        main_decl = f"procedure {ADA_MAIN_NAME} is\n\n"
+        comment_start = self.indent + '-- '
+        ada_description = (
+            comment_start + DOCSTRING_LINESTART_RE.sub("\n" + comment_start, description.strip()) + "\n"
+        )
         self.subprogram_name = ada_case(name)
-        return f"function {self.subprogram_name}"
+        self.subprogram_type = "function"  # TODO figure out when it's a procedure rather than a function
+        self.args_type = [self.translate_pytype(arg.annotation) for arg in args]
+        formal_args = [f"{self.gen_var(arg.arg)[0]} : {self.translate_pytype(arg.annotation)}" for arg in args]
+        formal_arg_list = "; ".join(formal_args)
+        self.return_type = self.translate_pytype(returns)
+        subprogram_signature = f"{self.subprogram_type} {self.subprogram_name} ({formal_arg_list})"
+        if self.subprogram_type == "function":
+            subprogram_signature = f"{subprogram_signature} return {self.return_type}"
+        ada_prompt = f"{self.package_imports()}\n{main_decl}{self.indent}{subprogram_signature};\n{ada_description}\n\n{self.indent}{subprogram_signature}"
+        return ada_prompt
 
     def test_suite_prefix_lines(self, entry_point: str) -> List[str]:
         """
@@ -173,7 +257,7 @@ class Translator(LanguageTranslator[TargetExp]):
 
             todo!()
         }
-        
+
         """
         if self.subprogram_name is None:
             raise TranslationDesignError("subprogram_name should never be None")
