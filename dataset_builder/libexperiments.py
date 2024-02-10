@@ -40,7 +40,7 @@ LANGS = [
     "ml",
     "hs",
     "elixir",
-    "ada",
+    "ada_2012",
 ]
 MODELS = ["davinci", "incoder", "codegen"]
 
