@@ -1,16 +1,14 @@
 from abc import ABC, abstractmethod
 from typing import Tuple, List, TypeVar, Generic
 import ast
+import re
 
 from base_language_translator import LanguageTranslator
 
 
 TargetExp = str
 
-
-def ada_case(name: str) -> str:
-    # TODO handle cases where name isn't snake_case
-    return name.title()
+ADA_KEYWORDS = {"abort", "abs", "abstract", "accept", "access", "aliased", "all", "and", "array", "at", "begin", "body", "case", "constant", "declare", "delay", "delta", "digits", "do", "else", "elsif", "end", "entry", "exception", "exit", "for", "function", "generic", "goto", "if", "in", "interface", "is", "limited", "loop", "mod", "new", "not", "null", "of", "or", "others", "out", "overriding", "package", "pragma", "private", "procedure", "protected", "raise", "range", "record", "rem", "renames", "requeue", "return", "reverse", "select", "separate", "some", "subtype", "synchronized", "tagged", "task", "terminate", "then", "type", "until", "use", "when", "while", "with", "xor",}
 
 ASCII_CHARACTERS = {
     "\x00": "ASCII.NUL",
@@ -47,6 +45,20 @@ ASCII_CHARACTERS = {
     "\x1f": "ASCII.US",
     "\x7f": "ASCII.DEL",
 }
+
+CAMEL_REGEX_1 = re.compile('(.)([A-Z][a-z]+)')
+CAMEL_REGEX_2 = re.compile('__([A-Z])')
+CAMEL_REGEX_3 = re.compile('([a-z0-9])([A-Z])')
+
+def camel_to_snake(name: str) -> str:
+    # Taken from: https://stackoverflow.com/a/1176023
+    name = CAMEL_REGEX_1.sub(r'\1_\2', name)
+    name = CAMEL_REGEX_2.sub(r'_\1', name)
+    name = CAMEL_REGEX_3.sub(r'\1_\2', name)
+    return name.lower()
+
+def ada_case(name: str) -> str:
+    return camel_to_snake(name).title()
 
 def python_string_to_ada_string(s: str) -> str:
     # TODO figure out WTF to do with UTF-8
@@ -86,7 +98,9 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a variable with name v.
         """
-        return "TODO"
+        if v in ADA_KEYWORDS:
+            return ada_case(f"my_{v}")
+        return ada_case(v)
 
     def gen_list(self, l: List[TargetExp]) -> TargetExp:
         """
