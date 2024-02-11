@@ -150,7 +150,7 @@ class Translator(LanguageTranslator[TargetExp]):
             case bool() | int() | float():
                 return str(c)
             case str():
-                return python_string_to_ada_string(c)
+                return f'"{python_string_to_ada_string(c)}"'
             case None:
                 return "null"
             case _:
@@ -187,11 +187,12 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a function call `func(args)`
         """
-        return "TODO"
+        return f"{func} ({', '.join(args)})"
 
     def package_imports(self) -> str:
         # TODO handle cases where more imports are needed e.g. vector/hashmap
         return '\n'.join([
+            "pragma Ada_2012;",
             "with Ada.Assertions; use Ada.Assertions;",
         ]) + '\n'
 
@@ -212,8 +213,10 @@ class Translator(LanguageTranslator[TargetExp]):
         formal_arg_list = "; ".join(formal_args)
         self.return_type = self.translate_pytype(returns)
         subprogram_signature = f"{self.subprogram_type} {self.subprogram_name} ({formal_arg_list})"
+        self.candidate_signature = f"{self.subprogram_type} Candidate ({formal_arg_list})"
         if self.subprogram_type == "function":
             subprogram_signature = f"{subprogram_signature} return {self.return_type}"
+            self.candidate_signature = f"{self.candidate_signature} return {self.return_type}"
         ada_prompt = f"{self.package_imports()}\n{main_decl}{self.indent}{subprogram_signature};\n{ada_description}\n\n{self.indent}{subprogram_signature}"
         return ada_prompt
 
@@ -222,19 +225,26 @@ class Translator(LanguageTranslator[TargetExp]):
         This code goes at the start of the test suite.
         The entry_point is ???
         """
-        return ["begin", "   "]
+        return [
+                "",
+                f"{self.indent}end {self.subprogram_name};",
+                "",
+                f"{self.indent}{self.candidate_signature} renames {self.subprogram_name};",
+                "",
+                "begin"
+            ]
 
     def test_suite_suffix_lines(self) -> List[str]:
         """
         This code goes at the end of the test suite.
         """
-        return ["end Test;", ""]
+        return [f"end {ADA_MAIN_NAME};", ""]
 
     def deep_equality(self, left: TargetExp, right: TargetExp) -> str:
         """
         All tests are assertions that compare deep equality between left and right.
         """
-        return "TODO"
+        return f"{self.indent}Assert ({left} = {right});"
 
     def file_ext(self) -> str:
         """
@@ -248,7 +258,7 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         if self.subprogram_name is None:
             raise TranslationDesignError("subprogram_name should never be None")
-        return [f"end {self.subprogram_name};"]
+        return [f"\n{self.indent}end "]
 
     def no_completion_prompt_stub(self) -> str:
         """
