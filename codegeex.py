@@ -31,7 +31,8 @@ CODEGEEX_LANGS = {
     "sh": "shell",
     "swift": "swift",
     "r": "r",
-    "clj": "clojure"
+    "clj": "clojure",
+    "ada": "ada", # Unsupported
 }
 
 

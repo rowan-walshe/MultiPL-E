@@ -19,7 +19,7 @@ def eval_script(path: Path):
 
     status = "OK"
     run_result = run([basename])
-    
+
     if run_result.timeout:
         status = "Timeout"
     elif run_result.exit_code != 0:
