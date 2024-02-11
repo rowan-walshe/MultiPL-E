@@ -21,6 +21,7 @@ import numpy as np
 from pathlib import Path
 import itertools
 import argparse
+import json
 from multipl_e.util import gunzip_json, eprint
 
 
@@ -33,8 +34,13 @@ def estimator(n: int, c: int, k: int) -> float:
     return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))
 
 
-def for_file(path):
-    data = gunzip_json(path)
+def for_file(path: Path):
+    if path.suffix == ".gz":
+        data = gunzip_json(path)
+    else:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        
     if data is None:
         return None
     n = len(data["results"])
