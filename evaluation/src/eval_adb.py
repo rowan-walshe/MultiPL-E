@@ -8,7 +8,7 @@ LANG_EXT = ".adb"
 
 def eval_script(path: Path):
     basename = ".".join(str(path).split(".")[:-1])
-    build_result = run(["gnatmake", path, "-o", basename])
+    build_result = run(["gnatmake", "-gnatW8", path, "-o", basename])
     if build_result.exit_code != 0:
         return {
             "status": "SyntaxError",
