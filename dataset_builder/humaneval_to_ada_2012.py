@@ -70,6 +70,19 @@ def python_string_to_ada_string(s: str) -> str:
     return s
 
 
+def coerce(expr: str, type) -> str:
+    def coerce_to_option(expr: str) -> str:
+        if expr == "None" or expr == "null":
+            return "(Valid => False)"
+        else:
+            return f"(Valid => True, Value => {expr})"
+    match expr, type:
+        case expr, ast.Subscript(ast.Name("Optional"), _):
+            return coerce_to_option(expr)
+        case _:
+            return expr
+
+
 class TranslationDesignError(Exception):
     pass
 
@@ -92,9 +105,24 @@ class Translator(LanguageTranslator[TargetExp]):
         # self.optional_type = "Optional"  # TODO figure out. Variant record?
         self.any_type = "Object"  # TODO cry
         self.indent = ' ' * 3
+        self._custom_type_decls = []
 
     def reinit(self) -> None:
         self.subprogram_name = None
+
+    def gen_array_type(self, elem_type):
+        element = self.translate_pytype(elem_type)
+        type_name = f"{element}_Array"
+        decl = f"type {type_name} is array (Integer range <>) of {element};"
+        self._custom_type_decls.append(decl)
+        return type_name
+
+    def gen_optional_type(self, elem_type):
+        element = self.translate_pytype(elem_type)
+        type_name = f"{element}_Option"
+        decl = f"type {type_name} (Valid : Boolean := False) is record case Valid is when True => Value : {element}; when False => null; end case; end record;"
+        self._custom_type_decls.append(decl)
+        return type_name
 
     def translate_pytype(self, ann: ast.expr | None) -> str:
         """Traverses an AST annotation and translate Python type annotation to an Ada Type"""
@@ -122,19 +150,15 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Dict(keys=k,values=v):
                 raise Exception("Not implemented")
             case ast.Subscript(value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)):
-                raise Exception("Not implemented")
+                raise Exception("Dict not implemented")
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
-                match elem_type.id:
-                    case "int":
-                        return "Int_Array"
-                    case _other:
-                        raise Exception("Not implemented")
+                return self.gen_array_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Tuple"), slice=elts):
-                raise Exception("Not implemented")
+                raise Exception("Tuple Not implemented")
             case ast.Subscript(value=ast.Name(id="Optional"), slice=elem_type):
-                raise Exception("Not implemented")
+                return self.gen_optional_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Union"), slice=ast.Tuple(elts=elems)):
-                raise Exception("Not implemented")
+                raise Exception("Union Not implemented")
             case ast.Name(id="Any"):
                 raise Exception("Not implemented")
             case ast.Constant(value=None):
@@ -173,7 +197,13 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a list with elements l
         """
-        return "(" + ", ".join(l) + ")"
+        match len(l):
+            case 0:
+                return "(1 .. 0 => <>)"
+            case 1:
+                return f"(0 => {l[0]})"
+            case _:
+                return "(" + ", ".join(l) + ")"
 
     def gen_tuple(self, t: List[TargetExp]) -> TargetExp:
         """
@@ -204,6 +234,8 @@ class Translator(LanguageTranslator[TargetExp]):
         Translate Python prompt.
         """
         self.reinit()
+        self.type = [[arg.annotation for arg in args], returns]
+
         main_decl = f"procedure {ADA_MAIN_NAME} is\n\n"
         comment_start = self.indent + '-- '
         ada_description = (
@@ -236,7 +268,8 @@ class Translator(LanguageTranslator[TargetExp]):
 
         ada_spec = f"{self.package_imports()}\n"
         ada_spec += "package Placeholder is\n"
-        ada_spec += f"{self.indent}type Int_Array is array (Integer range <>) of Integer;\n"
+        for typ in list(set(self._custom_type_decls)):
+            ada_spec += f"{self.indent}{typ}\n"
         ada_spec += f"{self.indent}{subprogram_signature};\n{ada_description}\n"
         ada_spec += "end Placeholder;\n\n"
 
@@ -303,3 +336,12 @@ class Translator(LanguageTranslator[TargetExp]):
         if self.subprogram_name is None:
             raise TranslationDesignError("subprogram_name should never be None")
         return f"end {self.subprogram_name};"
+
+    def finalize(self, result, context) -> str:
+        match context:
+            case "lhs":
+                return result
+            case "rhs":
+                return coerce(result, self.type[1])
+            case _other:
+                raise Exception("bad context to finalize")
