@@ -124,7 +124,11 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Subscript(value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)):
                 raise Exception("Not implemented")
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
-                raise Exception("Not implemented")
+                match elem_type.id:
+                    case "int":
+                        return "Int_Array"
+                    case _other:
+                        raise Exception("Not implemented")
             case ast.Subscript(value=ast.Name(id="Tuple"), slice=elts):
                 raise Exception("Not implemented")
             case ast.Subscript(value=ast.Name(id="Optional"), slice=elem_type):
@@ -169,7 +173,7 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a list with elements l
         """
-        return "TODO"
+        return "(" + ", ".join(l) + ")"
 
     def gen_tuple(self, t: List[TargetExp]) -> TargetExp:
         """
@@ -193,7 +197,6 @@ class Translator(LanguageTranslator[TargetExp]):
         # TODO handle cases where more imports are needed e.g. vector/hashmap
         return '\n'.join([
             "pragma Ada_2012;",
-            "with Ada.Assertions; use Ada.Assertions;",
         ]) + '\n'
 
     def translate_prompt(self, name: str, args: List[ast.arg], returns: ast.expr, description: str) -> str:
@@ -217,7 +220,31 @@ class Translator(LanguageTranslator[TargetExp]):
         if self.subprogram_type == "function":
             subprogram_signature = f"{subprogram_signature} return {self.return_type}"
             self.candidate_signature = f"{self.candidate_signature} return {self.return_type}"
-        ada_prompt = f"{self.package_imports()}\n{main_decl}{self.indent}{subprogram_signature};\n{ada_description}\n\n{self.indent}{subprogram_signature}"
+
+        # To be able to use custom types such as arrays of integers, the prompt
+        # starts with the specification of a "Placeholder" pacakge where we
+        # declare these types. Then comes the declaration the sub-program to be
+        # competed, and finally the beginning of "Placeholder" package body.
+        #
+        # Later in the testsuite prefix/suffix, we add a Main procedure to the
+        # output.
+        #
+        # The result should be an Ada file that contains both the specification
+        # and body of a "Placeholder" package, and a main procedure. This will
+        # will be split in several .ads and .adb files using gnatchop in
+        # evaluation phase.
+
+        ada_spec = f"{self.package_imports()}\n"
+        ada_spec += "package Placeholder is\n"
+        ada_spec += f"{self.indent}type Int_Array is array (Integer range <>) of Integer;\n"
+        ada_spec += f"{self.indent}{subprogram_signature};\n{ada_description}\n"
+        ada_spec += "end Placeholder;\n\n"
+
+        ada_body = f"{self.package_imports()}\n"
+        ada_body += "package body Placeholder is\n"
+        ada_body += f"{self.indent}{subprogram_signature}"
+
+        ada_prompt = ada_spec + ada_body
         return ada_prompt
 
     def test_suite_prefix_lines(self, entry_point: str) -> List[str]:
@@ -229,7 +256,11 @@ class Translator(LanguageTranslator[TargetExp]):
                 "",
                 f"{self.indent}end {self.subprogram_name};",
                 "",
-                f"{self.indent}{self.candidate_signature} renames {self.subprogram_name};",
+                "end Placeholder;",
+                "",
+                "with Placeholder; use Placeholder;",
+                f"procedure Main is",
+                f"{self.indent}{self.candidate_signature} renames Placeholder.{self.subprogram_name};",
                 "",
                 "begin"
             ]
@@ -238,13 +269,13 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         This code goes at the end of the test suite.
         """
-        return [f"end {ADA_MAIN_NAME};", ""]
+        return [f"end Main;"]
 
     def deep_equality(self, left: TargetExp, right: TargetExp) -> str:
         """
         All tests are assertions that compare deep equality between left and right.
         """
-        return f"{self.indent}Assert ({left} = {right});"
+        return f"{self.indent}pragma Assert ({left} = {right});"
 
     def file_ext(self) -> str:
         """
@@ -272,5 +303,3 @@ class Translator(LanguageTranslator[TargetExp]):
         if self.subprogram_name is None:
             raise TranslationDesignError("subprogram_name should never be None")
         return f"end {self.subprogram_name};"
-
-
