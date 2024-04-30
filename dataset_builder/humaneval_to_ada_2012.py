@@ -93,7 +93,7 @@ class Translator(LanguageTranslator[TargetExp]):
         super().__init__()
         self.reinit()
         super().__init__()
-        self.string_type = "String"
+        self.string_type = "Unbounded_String"
         self.float_type = "Float"
         self.int_type = "Integer"
         self.bool_type = "Boolean"
@@ -109,6 +109,7 @@ class Translator(LanguageTranslator[TargetExp]):
 
     def reinit(self) -> None:
         self.subprogram_name = None
+        self._custom_type_decls = []
 
     def gen_array_type(self, elem_type):
         element = self.translate_pytype(elem_type)
@@ -178,7 +179,7 @@ class Translator(LanguageTranslator[TargetExp]):
             case bool() | int() | float():
                 return str(c)
             case str():
-                return f'"{python_string_to_ada_string(c)}"'
+                return f'To_Unbounded_String ("{python_string_to_ada_string(c)}")'
             case None:
                 return "null"
             case _:
@@ -227,6 +228,7 @@ class Translator(LanguageTranslator[TargetExp]):
         # TODO handle cases where more imports are needed e.g. vector/hashmap
         return '\n'.join([
             "pragma Ada_2012;",
+            "with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;",
         ]) + '\n'
 
     def translate_prompt(self, name: str, args: List[ast.arg], returns: ast.expr, description: str) -> str:
@@ -291,6 +293,7 @@ class Translator(LanguageTranslator[TargetExp]):
                 "",
                 "end Placeholder;",
                 "",
+                "with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;",
                 "with Placeholder; use Placeholder;",
                 f"procedure Main is",
                 f"{self.indent}{self.candidate_signature} renames Placeholder.{self.subprogram_name};",
