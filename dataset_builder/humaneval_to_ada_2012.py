@@ -125,6 +125,19 @@ class Translator(LanguageTranslator[TargetExp]):
         self._custom_type_decls.append(decl)
         return type_name
 
+    def gen_tuple_type(self, elts):
+        element_types = [self.translate_pytype(elem) for elem in elts]
+
+        type_name = "_".join(element_types) + "_Tuple"
+        decl = f"type {type_name} is record\n"
+        count = 1
+        for elt in element_types:
+            decl += f"     {elt}_{count} : {elt};\n"
+            count += 1
+        decl += "   end record;\n"
+        self._custom_type_decls.append(decl)
+        return type_name
+
     def translate_pytype(self, ann: ast.expr | None) -> str:
         """Traverses an AST annotation and translate Python type annotation to an Ada Type"""
 
@@ -155,7 +168,7 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
                 return self.gen_array_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Tuple"), slice=elts):
-                raise Exception("Tuple Not implemented")
+                return self.gen_tuple_type(elts.elts)
             case ast.Subscript(value=ast.Name(id="Optional"), slice=elem_type):
                 return self.gen_optional_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Union"), slice=ast.Tuple(elts=elems)):
@@ -210,7 +223,7 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a tuple with elements t
         """
-        return "TODO"
+        return "(" + ", ".join(t) + ")"
 
     def gen_dict(self, keys: List[TargetExp], values: List[TargetExp]) -> TargetExp:
         """
@@ -246,7 +259,7 @@ class Translator(LanguageTranslator[TargetExp]):
         self.subprogram_name = ada_case(name)
         self.subprogram_type = "function"  # TODO figure out when it's a procedure rather than a function
         self.args_type = [self.translate_pytype(arg.annotation) for arg in args]
-        formal_args = [f"{self.gen_var(arg.arg)[0]} : {self.translate_pytype(arg.annotation)}" for arg in args]
+        formal_args = [f"{self.gen_var(arg.arg)} : {self.translate_pytype(arg.annotation)}" for arg in args]
         formal_arg_list = "; ".join(formal_args)
         self.return_type = self.translate_pytype(returns)
         subprogram_signature = f"{self.subprogram_type} {self.subprogram_name} ({formal_arg_list})"
