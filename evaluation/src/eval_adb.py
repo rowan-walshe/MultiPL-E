@@ -8,17 +8,27 @@ LANG_EXT = ".adb"
 
 def eval_script(path: Path):
     basename = ".".join(str(path).split(".")[:-1])
-    build_result = run(["gnatmake", "-gnatW8", path, "-o", basename])
+    chop_result = run(["gnatchop", "-w", path])
+    if chop_result.exit_code != 0:
+        return {
+            "status": "SyntaxError (gnatchop)",
+            "exit_code": chop_result.exit_code,
+            "stdout": chop_result.stdout,
+            "stderr": chop_result.stderr,
+        }
+
+    build_result = run(["gnatmake", "-gnatW8", "main.adb", "-o", "main",
+                        "-g", "-gnata", "-gnat2022", "-gnateE", "-bargs", "-Es"])
     if build_result.exit_code != 0:
         return {
-            "status": "SyntaxError",
+            "status": "SyntaxError (gnatmake)",
             "exit_code": build_result.exit_code,
             "stdout": build_result.stdout,
             "stderr": build_result.stderr,
         }
 
     status = "OK"
-    run_result = run([basename])
+    run_result = run(["./main"])
 
     if run_result.timeout:
         status = "Timeout"
