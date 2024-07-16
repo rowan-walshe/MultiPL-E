@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "multipl-e"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+aiohttp = "^3.9.5"
+tqdm = "^4.66.4"
+pytest = "^8.2.2"
+datasets = "^2.20.0"
+transformers = "^4.42.4"
+numpy = "<2"
+torch = "2.3.0"
+vllm = "^0.5.1"
+flash-attn = {url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.5.8/flash_attn-2.5.8+cu122torch2.3cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"}
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

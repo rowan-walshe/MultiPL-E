@@ -156,13 +156,13 @@ class Translator(LanguageTranslator[TargetExp]):
                 return self.bool_type
             case ast.Name(id="None"):
                 #It appears None is always used in optional
-                raise Exception("Not implemented")
+                raise Exception("None not implemented")
             case ast.List(elts=elts):
-                raise Exception("Not implemented")
+                raise Exception("List not implemented")
             case ast.Tuple(elts=elts):
-                raise Exception("Not implemented")
+                raise Exception("Tuple not implemented")
             case ast.Dict(keys=k,values=v):
-                raise Exception("Not implemented")
+                raise Exception("Dict not implemented")
             case ast.Subscript(value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)):
                 raise Exception("Dict not implemented")
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
@@ -172,13 +172,13 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Subscript(value=ast.Name(id="Optional"), slice=elem_type):
                 return self.gen_optional_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Union"), slice=ast.Tuple(elts=elems)):
-                raise Exception("Union Not implemented")
+                raise Exception("Union not implemented")
             case ast.Name(id="Any"):
-                raise Exception("Not implemented")
+                raise Exception("Any not implemented")
             case ast.Constant(value=None):
-                raise Exception("Not implemented")
+                raise Exception("Constant not implemented")
             case ast.Constant(value=Ellipsis):
-                raise Exception("Translator do not support translating Ellipsis")
+                raise Exception("Translator does not support translating Ellipsis")
             case _other:
                 print(f"Unhandled annotation: {ast.dump(ann)}")
                 raise Exception(f"Unhandled annotation: {ann}")
