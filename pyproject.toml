@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "multipl-e"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [
+    { include = "multipl_e"}
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+vllm = { version = "^0.6.3", optional = true }
+aiohttp = "^3.10.10"
+numpy = "<2"
+tqdm = "^4.67.0"
+pytest = "^8.3.3"
+datasets = "^3.1.0"
+torch = "2.4.0"
+transformers = "^4.46.2"
+peft = {version = "^0.13.2", optional = true}
+
+[tool.poetry.extras]
+vllm = ["vllm"]
+peft = ["peft"]
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

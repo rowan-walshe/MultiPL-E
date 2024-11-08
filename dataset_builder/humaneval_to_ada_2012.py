@@ -1,3 +1,38 @@
+"""This script can be used to translate problems from the HumanEval and
+MBPP datasets into Ada 2012.
+
+There are a number of limitations of this script including:
+- Ada does not have a tuple type. We've chosen to use a record in these case,
+  though it doesn't behave the same as a tuple in python
+- There are a few untyped problems, or problems that use a container type but don't
+  specify the type of the contained elements e.g. `List` vs `List[int]`. We can't
+  easily, and so haven't translated these types
+- It won't translate any problem that uses the type `Any`
+- Ada doesn't have a built in Optional equivalent. You can build your own using
+  a variant record, which is what we've chosen to do. To attempt to translate
+  test cases that use Optional, we have used the same approach and workaround
+  as the humaneval_to_rs.py
+- Many of the docstrings won't fully make sense as they will use type names that
+  don't exist in Ada, so the docstrings won't make a whole lot of sense
+- It is very likely that some of the translations were generated with invalid
+  types or signatures, making it impossible to pass those benchmarks
+
+Note also that these translations won't include examples of a large number of
+Ada feature including but not limited to:
+- Subtypes
+- Enumerations
+- Access types
+- Fixed point types
+- Limited type
+- Generic packages or subprograms
+- Private parts
+- Tasks
+- Contracts
+- Much of the standard library
+- Any Ada 2022 features
+
+"""
+
 from abc import ABC, abstractmethod
 from typing import Tuple, List, TypeVar, Generic
 import ast
@@ -11,6 +46,7 @@ TargetExp = str
 ADA_MAIN_NAME = "Main"
 
 ADA_KEYWORDS = {"abort", "abs", "abstract", "accept", "access", "aliased", "all", "and", "array", "at", "begin", "body", "case", "constant", "declare", "delay", "delta", "digits", "do", "else", "elsif", "end", "entry", "exception", "exit", "for", "function", "generic", "goto", "if", "in", "interface", "is", "limited", "loop", "mod", "new", "not", "null", "of", "or", "others", "out", "overriding", "package", "pragma", "private", "procedure", "protected", "raise", "range", "record", "rem", "renames", "requeue", "return", "reverse", "select", "separate", "some", "subtype", "synchronized", "tagged", "task", "terminate", "then", "type", "until", "use", "when", "while", "with", "xor",}
+STANDARD_LIBRARY_TYPES = {"boolean", "integer", "short_short_integer", "short_integer", "long_integer", "long_long_integer", "short_float", "float", "long_float", "long_long_float", "string", "wide_string", "duration",}
 
 ASCII_CHARACTERS = {
     "\x00": "ASCII.NUL",
@@ -63,7 +99,7 @@ def ada_case(name: str) -> str:
     return camel_to_snake(name).title()
 
 def python_string_to_ada_string(s: str) -> str:
-    # TODO figure out WTF to do with UTF-8
+    # TODO figure out what to do with UTF-8 🙈
     s = s.replace('"', '""')
     for c in ASCII_CHARACTERS:
         s.replace(c, f'" & {ASCII_CHARACTERS[c]} & "')
@@ -71,6 +107,12 @@ def python_string_to_ada_string(s: str) -> str:
 
 
 def coerce(expr: str, type) -> str:
+    """Addresses differences in literal syntax due to our selected method of translating types
+
+    Optional: We've used a variant record to represent an optional type. This means we can't just
+              use the value or None / equivalent. There is also one edge case for HumanEval 136
+              which is implemented in a non-generic way, but makes that benchmark valid.
+    """
     def coerce_to_option(expr: str) -> str:
         if expr == "None" or expr == "null":
             return "(Valid => False)"
@@ -79,6 +121,14 @@ def coerce(expr: str, type) -> str:
     match expr, type:
         case expr, ast.Subscript(ast.Name("Optional"), _):
             return coerce_to_option(expr)
+        # This is a special case for just one benchmark (HumanEval_136), which
+        # uses Tuple[Option[int], Option[int]>]. There is something more rigorous
+        # to be done here where we properly coerce things. But I, like the
+        # implementor of the rust translator, do not want to do it
+        case expr, ast.Subscript(ast.Name("Tuple"),
+                ast.Tuple([ast.Subscript(ast.Name("Optional")), ast.Subscript(ast.Name("Optional"))], _)):
+            l, r = expr.strip("()").split(", ")
+            return f"({coerce_to_option(l)}, {coerce_to_option(r)})"
         case _:
             return expr
 
@@ -92,26 +142,30 @@ class Translator(LanguageTranslator[TargetExp]):
     def __init__(self) -> None:
         super().__init__()
         self.reinit()
-        super().__init__()
         self.string_type = "Unbounded_String"
         self.float_type = "Float"
         self.int_type = "Integer"
         self.bool_type = "Boolean"
-        # self.none_type = "Optional.empty()" # TODO figure out None types
         self.array_type = "Array"
-        # self.list_type = "ArrayList"  # TODO figure out Vector vs Array, and handling non-fixed length elements e.g. Strings
-        # self.tuple_type = "Pair"  # TODO figure out Tuple
-        # self.dict_type = "HashMap"  # TODO figure out dict
-        # self.optional_type = "Optional"  # TODO figure out. Variant record?
-        self.any_type = "Object"  # TODO cry
         self.indent = ' ' * 3
         self._custom_type_decls = []
 
     def reinit(self) -> None:
         self.subprogram_name = None
         self._custom_type_decls = []
+        self._imports = ["with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;"]
+
+    def gen_set_type(self, elem_type):
+        # Probably won't work complex examples, but there is only one "valid" problem that uses set in MBPP and HumanEval
+        element = self.translate_pytype(elem_type)
+        type_name = f"{element}_Sets"
+        self._imports.append("with Ada.Containers.Ordered_Sets;")
+        decl = f"package {type_name} is new Ada.Containers.Ordered_Sets (Element_Type => Integer);\n   use {type_name};"
+        self._custom_type_decls.append(decl)
+        return "Set"
 
     def gen_array_type(self, elem_type):
+        # TODO handle cases where element isn't a fixed size e.g. strings, unconstrained arrays etc.
         element = self.translate_pytype(elem_type)
         type_name = f"{element}_Array"
         decl = f"type {type_name} is array (Integer range <>) of {element};"
@@ -121,7 +175,7 @@ class Translator(LanguageTranslator[TargetExp]):
     def gen_optional_type(self, elem_type):
         element = self.translate_pytype(elem_type)
         type_name = f"{element}_Option"
-        decl = f"type {type_name} (Valid : Boolean := False) is record case Valid is when True => Value : {element}; when False => null; end case; end record;"
+        decl = f"type {type_name} (Valid : Boolean := False) is record\n   case Valid is\n      when True =>\n         Value : {element};\n      when False =>\n         null;\n   end case;\nend record;"
         self._custom_type_decls.append(decl)
         return type_name
 
@@ -156,13 +210,15 @@ class Translator(LanguageTranslator[TargetExp]):
                 return self.bool_type
             case ast.Name(id="None"):
                 #It appears None is always used in optional
-                raise Exception("Not implemented")
+                raise Exception("None type not implemented")
+            case ast.Name(id="Set"):
+                raise Exception("Set without defined element type not implemented")
             case ast.List(elts=elts):
-                raise Exception("Not implemented")
+                raise Exception("List without defined element type not implemented")
             case ast.Tuple(elts=elts):
-                raise Exception("Not implemented")
+                raise Exception("Tuple not implemented")
             case ast.Dict(keys=k,values=v):
-                raise Exception("Not implemented")
+                raise Exception("Dict without defined key and value types not implemented")
             case ast.Subscript(value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)):
                 raise Exception("Dict not implemented")
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
@@ -173,10 +229,12 @@ class Translator(LanguageTranslator[TargetExp]):
                 return self.gen_optional_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Union"), slice=ast.Tuple(elts=elems)):
                 raise Exception("Union Not implemented")
+            case ast.Subscript(value=ast.Name(id="Set"), slice=elem_type):
+                return self.gen_set_type(elem_type)
             case ast.Name(id="Any"):
-                raise Exception("Not implemented")
+                raise Exception("Any type not implemented")
             case ast.Constant(value=None):
-                raise Exception("Not implemented")
+                raise Exception("None constant type not implemented")
             case ast.Constant(value=Ellipsis):
                 raise Exception("Translator do not support translating Ellipsis")
             case _other:
@@ -203,7 +261,11 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a variable with name v.
         """
-        if v in ADA_KEYWORDS:
+        v = v.lower()  # Ada is case insensitive
+
+        # We don't have to rename variables who's names clash with types from the standard library
+        # But doing some will make more normal subprogram specifications
+        if v in ADA_KEYWORDS or v in STANDARD_LIBRARY_TYPES:
             return ada_case(f"my_{v}")
         return ada_case(v)
 
@@ -241,7 +303,7 @@ class Translator(LanguageTranslator[TargetExp]):
         # TODO handle cases where more imports are needed e.g. vector/hashmap
         return '\n'.join([
             "pragma Ada_2012;",
-            "with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;",
+            *self._imports
         ]) + '\n'
 
     def translate_prompt(self, name: str, args: List[ast.arg], returns: ast.expr, description: str) -> str:
@@ -351,7 +413,7 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         if self.subprogram_name is None:
             raise TranslationDesignError("subprogram_name should never be None")
-        return f"end {self.subprogram_name};"
+        return f"raise Program_Error with \"Not implemented\";\n   end {self.subprogram_name};"
 
     def finalize(self, result, context) -> str:
         match context:
