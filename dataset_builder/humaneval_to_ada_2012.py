@@ -33,9 +33,9 @@ Ada feature including but not limited to:
 
 """
 
-from abc import ABC, abstractmethod
-from typing import Tuple, List, TypeVar, Generic
+from typing import List
 import ast
+import base64
 import re
 
 from base_language_translator import LanguageTranslator
@@ -112,6 +112,11 @@ def coerce(expr: str, type) -> str:
     Optional: We've used a variant record to represent an optional type. This means we can't just
               use the value or None / equivalent. There is also one edge case for HumanEval 136
               which is implemented in a non-generic way, but makes that benchmark valid.
+    Strings: If a string is an argument to our candidate function, or the return type, we can use
+             a regular String. If a string is part of a container like a record or an array
+             for example, we can't just use the String type. For records we could use a
+             discriminated record to define the length of the sting. We've however chosen to just
+             use the Unbounded_String type in these cases.
     """
     def coerce_to_option(expr: str) -> str:
         if expr == "None" or expr == "null":
@@ -129,9 +134,106 @@ def coerce(expr: str, type) -> str:
                 ast.Tuple([ast.Subscript(ast.Name("Optional")), ast.Subscript(ast.Name("Optional"))], _)):
             l, r = expr.strip("()").split(", ")
             return f"({coerce_to_option(l)}, {coerce_to_option(r)})"
+        case expr, ast.Name(id="str"):
+            return make_bounded_string(expr)
         case _:
-            return expr
+            return make_unbounded_strings(expr)
 
+def extract_arguments(expr: str) -> List[str]:
+    """Given a function call extract a list of the top level arguments. e.g.:
+    - "Candidate (1, 2, 3)" -> ['1', '2', '3']
+    - "Candidate ("foo", (1, 2, 3))" -> ['"foo"', '(1, 2, 3)']
+
+    Assumes that expr has arguments, which is the case for HumanEval and MBPP.
+    """
+    # Remove the function name and parentheses
+    start = expr.index('(') + 1
+    end = expr.rindex(')')
+    arguments_str = expr[start:end].strip()
+
+    arguments = []
+    current_arg = []
+    nested_level = 0
+    in_string = False
+
+    for char in arguments_str:
+        if char == ',' and not in_string and nested_level == 0:
+            # When we encounter a comma at the top level, split the argument
+            arguments.append(''.join(current_arg).strip())
+            current_arg = []
+        else:
+            current_arg.append(char)
+            # Handle nested parentheses
+            if char == '"':
+                in_string = not in_string
+            elif not in_string and char in ['(', '[']:
+                nested_level += 1
+            elif not in_string and char in [')', ']']:
+                nested_level -= 1
+
+    # Append the last argument
+    if current_arg:
+        arguments.append(''.join(current_arg).strip())
+
+    return arguments
+
+BASE64_PATTERN = re.compile(r"\"(?P<b64>(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}={2}))\"")
+
+def decode_bounded_string(match) -> str:
+    """Decode a base64 encoded string that is surrounded by quotes to a bounded string e.g.:
+    - '""' -> '""'
+    - '"YWJj"' -> '"abc"'
+    - '"Zm9vIiJiYXI="' => '"foo""bar"'
+    """
+    base64_string = match.group("b64")
+    utf8_bytes = base64.b64decode(base64_string)
+    utf8_string = utf8_bytes.decode("utf-8")
+    return f'"{utf8_string}"'
+
+def decode_unbounded_string(match) -> str:
+    """Decode a base64 encoded string that is surrounded by quotes to an unbounded string e.g.:
+    - '""' -> 'To_Unbounded_String ("")'
+    - '"YWJj"' -> 'To_Unbounded_String ("abc")'
+    - '"Zm9vIiJiYXI="' => 'To_Unbounded_String ("foo""bar")'
+    """
+    utf8_string = decode_bounded_string(match)
+    return f'To_Unbounded_String ({utf8_string})'
+
+def make_bounded_string(expr: str) -> str:
+    """Replace all strings in the expr with bounded strings,
+    decoding the base64 format in the process"""
+    return BASE64_PATTERN.sub(decode_bounded_string, expr)
+
+def make_unbounded_strings(expr: str) -> str:
+    """Replace all strings in the expr with unbounded strings,
+    decoding the base64 format in the process"""
+    return BASE64_PATTERN.sub(decode_unbounded_string, expr)
+
+SUBP_NAME_PATTERN = re.compile(r"^(?P<subp>\S+)\s+\(.*\)$")
+
+def get_subp_name(expr: str) -> str:
+    """Get the subprogram name of the lhs expression. Should be Candidate"""
+    return SUBP_NAME_PATTERN.match(expr).group("subp")
+
+def create_strings_in_arg(arg: str) -> str:
+    """If an argument is a string, make it bounded, other make it unbounded"""
+    if arg[0] == '"':
+        return make_bounded_string(arg)
+    return make_unbounded_strings(arg)
+
+def create_strings_in_lhs(lhs_expr: str) -> str:
+    """This is used to properly format strings in the lhs of a test case.
+
+    Extract all of the top level arguments of the lhs expression. For each
+    top level argument:
+    - If it is a string, convert it to a bounded string
+    - Otherwise extract all strings and convert them to unbounded strings
+    Then rebuild the lhs function call.
+    """
+    subp_name = get_subp_name(lhs_expr)
+    args = extract_arguments(lhs_expr)
+    args = [create_strings_in_arg(x) for x in args]
+    return f"{subp_name} ({', '.join(args)})"
 
 class TranslationDesignError(Exception):
     pass
@@ -142,7 +244,6 @@ class Translator(LanguageTranslator[TargetExp]):
     def __init__(self) -> None:
         super().__init__()
         self.reinit()
-        self.string_type = "Unbounded_String"
         self.float_type = "Float"
         self.int_type = "Integer"
         self.bool_type = "Boolean"
@@ -153,13 +254,13 @@ class Translator(LanguageTranslator[TargetExp]):
     def reinit(self) -> None:
         self.subprogram_name = None
         self._custom_type_decls = []
-        self._imports = ["with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;"]
+        self._imports = set()
 
     def gen_set_type(self, elem_type):
         # Probably won't work complex examples, but there is only one "valid" problem that uses set in MBPP and HumanEval
         element = self.translate_pytype(elem_type)
         type_name = f"{element}_Sets"
-        self._imports.append("with Ada.Containers.Ordered_Sets;")
+        self._imports.add("with Ada.Containers.Ordered_Sets;")
         decl = f"package {type_name} is new Ada.Containers.Ordered_Sets (Element_Type => Integer);\n   use {type_name};"
         self._custom_type_decls.append(decl)
         return "Set"
@@ -192,7 +293,7 @@ class Translator(LanguageTranslator[TargetExp]):
         self._custom_type_decls.append(decl)
         return type_name
 
-    def translate_pytype(self, ann: ast.expr | None) -> str:
+    def translate_pytype(self, ann: ast.expr | None, top_level: bool = False) -> str:
         """Traverses an AST annotation and translate Python type annotation to an Ada Type"""
 
         if ann == None:
@@ -201,7 +302,10 @@ class Translator(LanguageTranslator[TargetExp]):
         # Todo add missing Set type
         match ann:
             case ast.Name(id="str"):
-                return self.string_type
+                if top_level:
+                    return "String"
+                self._imports.add("with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;")
+                return "Unbounded_String"
             case ast.Name(id="int"):
                 return self.int_type
             case ast.Name(id="float"):
@@ -250,7 +354,17 @@ class Translator(LanguageTranslator[TargetExp]):
             case bool() | int() | float():
                 return str(c)
             case str():
-                return f'To_Unbounded_String ("{python_string_to_ada_string(c)}")'
+                """We don't know at this point if the string can be bounded, or must be unbounded.
+                Instead we'll just output a string and then later during the call to `finalize`
+                we'll create bounded or unbounded strings where needed.
+
+                We're converting the contents of the string to make it easier to
+                reliably pattern match the start and end of a string."""
+                string = python_string_to_ada_string(c)
+                utf8_bytes = string.encode("utf-8")
+                base64_bytes = base64.b64encode(utf8_bytes)
+                base64_string = base64_bytes.decode("utf-8")
+                return f'"{base64_string}"'
             case None:
                 return "null"
             case _:
@@ -319,11 +433,11 @@ class Translator(LanguageTranslator[TargetExp]):
             comment_start + DOCSTRING_LINESTART_RE.sub("\n" + comment_start, description.strip()) + "\n"
         )
         self.subprogram_name = ada_case(name)
-        self.subprogram_type = "function"  # TODO figure out when it's a procedure rather than a function
-        self.args_type = [self.translate_pytype(arg.annotation) for arg in args]
-        formal_args = [f"{self.gen_var(arg.arg)} : {self.translate_pytype(arg.annotation)}" for arg in args]
+        self.subprogram_type = "function"  # Will always use function as all subprograms in MBPP and HumanEval have return types
+        self.args_type = [self.translate_pytype(arg.annotation, True) for arg in args]
+        formal_args = [f"{self.gen_var(arg.arg)} : {self.translate_pytype(arg.annotation, True)}" for arg in args]
         formal_arg_list = "; ".join(formal_args)
-        self.return_type = self.translate_pytype(returns)
+        self.return_type = self.translate_pytype(returns, True)
         subprogram_signature = f"{self.subprogram_type} {self.subprogram_name} ({formal_arg_list})"
         self.candidate_signature = f"{self.subprogram_type} Candidate ({formal_arg_list})"
         if self.subprogram_type == "function":
@@ -368,7 +482,7 @@ class Translator(LanguageTranslator[TargetExp]):
                 "",
                 "end Placeholder;",
                 "",
-                "with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;",
+                self.package_imports(),
                 "with Placeholder; use Placeholder;",
                 f"procedure Main is",
                 f"{self.indent}{self.candidate_signature} renames Placeholder.{self.subprogram_name};",
@@ -418,7 +532,7 @@ class Translator(LanguageTranslator[TargetExp]):
     def finalize(self, result, context) -> str:
         match context:
             case "lhs":
-                return result
+                return create_strings_in_lhs(result)
             case "rhs":
                 return coerce(result, self.type[1])
             case _other:
