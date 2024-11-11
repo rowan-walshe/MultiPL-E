@@ -21,9 +21,10 @@ Note also that these translations won't include examples of a large number of
 Ada feature including but not limited to:
 - Subtypes
 - Enumerations
+- Mutli-dimensional array types
 - Access types
 - Fixed point types
-- Limited type
+- Limited types
 - Generic packages or subprograms
 - Private parts
 - Tasks
@@ -47,6 +48,14 @@ ADA_MAIN_NAME = "Main"
 
 ADA_KEYWORDS = {"abort", "abs", "abstract", "accept", "access", "aliased", "all", "and", "array", "at", "begin", "body", "case", "constant", "declare", "delay", "delta", "digits", "do", "else", "elsif", "end", "entry", "exception", "exit", "for", "function", "generic", "goto", "if", "in", "interface", "is", "limited", "loop", "mod", "new", "not", "null", "of", "or", "others", "out", "overriding", "package", "pragma", "private", "procedure", "protected", "raise", "range", "record", "rem", "renames", "requeue", "return", "reverse", "select", "separate", "some", "subtype", "synchronized", "tagged", "task", "terminate", "then", "type", "until", "use", "when", "while", "with", "xor",}
 STANDARD_LIBRARY_TYPES = {"boolean", "integer", "short_short_integer", "short_integer", "long_integer", "long_long_integer", "short_float", "float", "long_float", "long_long_float", "string", "wide_string", "duration",}
+
+# These types might be generated, but are not valid. For now we'll just fail to
+# translate prompts that try to generate these types
+INVALID_TYPES = [
+    "Integer_Array_Array",
+    "Unbounded_String_Array_Array",
+    "Integer_Integer_Array_Tuple",
+]
 
 ASCII_CHARACTERS = {
     "\x00": "ASCII.NUL",
@@ -469,10 +478,18 @@ class Translator(LanguageTranslator[TargetExp]):
         # will be split in several .ads and .adb files using gnatchop in
         # evaluation phase.
 
+        for custom_type in set(self._custom_type_decls):
+            for invalid_type in INVALID_TYPES:
+                if invalid_type in custom_type:
+                    raise TranslationDesignError(f'Tried to generate invalid type: "{custom_type}"')
+
         ada_spec = f"{self.package_imports()}\n"
         ada_spec += "package Placeholder is\n"
-        for typ in list(set(self._custom_type_decls)):
-            ada_spec += f"{self.indent}{typ}\n"
+        seen_types = set()
+        for custom_type in self._custom_type_decls:
+            if custom_type not in seen_types:
+                seen_types.add(custom_type)
+                ada_spec += f"{self.indent}{custom_type}\n"
         ada_spec += f"{self.indent}{subprogram_signature};\n{ada_description}\n"
         ada_spec += "end Placeholder;\n\n"
 
