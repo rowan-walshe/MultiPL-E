@@ -238,6 +238,8 @@ def create_strings_in_lhs(lhs_expr: str) -> str:
 class TranslationDesignError(Exception):
     pass
 
+class HackyFix(Exception):
+    pass
 
 class Translator(LanguageTranslator[TargetExp]):
 
@@ -255,6 +257,7 @@ class Translator(LanguageTranslator[TargetExp]):
         self.subprogram_name = None
         self._custom_type_decls = []
         self._imports = set()
+        self._humaneval_148_workaround = False
 
     def gen_set_type(self, elem_type):
         # Probably won't work complex examples, but there is only one "valid" problem that uses set in MBPP and HumanEval
@@ -328,7 +331,11 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
                 return self.gen_array_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Tuple"), slice=elts):
-                return self.gen_tuple_type(elts.elts)
+                try:
+                    return self.gen_tuple_type(elts.elts)
+                except HackyFix:
+                    self._humaneval_148_workaround = True
+                    return self.gen_array_type(elts.elts[0])
             case ast.Subscript(value=ast.Name(id="Optional"), slice=elem_type):
                 return self.gen_optional_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Union"), slice=ast.Tuple(elts=elems)):
@@ -340,7 +347,9 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Constant(value=None):
                 raise Exception("None constant type not implemented")
             case ast.Constant(value=Ellipsis):
-                raise Exception("Translator do not support translating Ellipsis")
+                """Only one test case has this type, HumanEval_148. We can
+                fix this in a hacky way by just using an array type instead"""
+                raise HackyFix("TODO figure out a less hacky fix")
             case _other:
                 print(f"Unhandled annotation: {ast.dump(ann)}")
                 raise Exception(f"Unhandled annotation: {ann}")
@@ -399,6 +408,9 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a tuple with elements t
         """
+        if self._humaneval_148_workaround:
+            # Workaround for HumanEval_148, in which we're using an array instead
+            return self.gen_list(t)
         return "(" + ", ".join(t) + ")"
 
     def gen_dict(self, keys: List[TargetExp], values: List[TargetExp]) -> TargetExp:
@@ -482,8 +494,9 @@ class Translator(LanguageTranslator[TargetExp]):
                 "",
                 "end Placeholder;",
                 "",
-                self.package_imports(),
+                self.package_imports().strip(),
                 "with Placeholder; use Placeholder;",
+                "",
                 f"procedure Main is",
                 f"{self.indent}{self.candidate_signature} renames Placeholder.{self.subprogram_name};",
                 "",
