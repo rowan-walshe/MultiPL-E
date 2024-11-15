@@ -6,9 +6,11 @@ from generic_eval import main
 LANG_NAME = "Ada"
 LANG_EXT = ".adb"
 
+
 def eval_script(path: Path):
-    basename = ".".join(str(path).split(".")[:-1])
-    chop_result = run(["gnatchop", "-w", path])
+    working_dir: Path = path.parent / (path.stem + "_tmp")
+    working_dir.mkdir()
+    chop_result = run(["gnatchop", "-w", path, working_dir])
     if chop_result.exit_code != 0:
         return {
             "status": "SyntaxError (gnatchop)",
@@ -17,8 +19,23 @@ def eval_script(path: Path):
             "stderr": chop_result.stderr,
         }
 
-    build_result = run(["gnatmake", "-gnatW8", "main.adb", "-o", "main",
-                        "-g", "-gnata", "-gnat2022", "-gnateE", "-bargs", "-Es"])
+    build_result = run(
+        [
+            "gnatmake",
+            "-gnatW8",
+            "main.adb",
+            "-o",
+            "main",
+            "-g",
+            "-j0",
+            "-gnata",
+            "-gnat2022",
+            "-gnateE",
+            "-bargs",
+            "-Es",
+        ],
+        cwd=str(working_dir),
+    )
     if build_result.exit_code != 0:
         return {
             "status": "SyntaxError (gnatmake)",
@@ -28,7 +45,7 @@ def eval_script(path: Path):
         }
 
     status = "OK"
-    run_result = run(["./main"])
+    run_result = run(["./main"], cwd=str(working_dir))
 
     if run_result.timeout:
         status = "Timeout"
