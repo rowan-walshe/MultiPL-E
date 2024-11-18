@@ -121,53 +121,53 @@ def make_valid_ada_name(name: str) -> str:
     characters with underscores."""
     return re.sub(r'\W', '_', name)
 
-def make_strings_in_dicts_recognizable(elements: List[TargetExp]) -> List[TargetExp]:
-    """We can't use an unbounded string as a key in a dict. We can use a bounded string.
-    To make it easier to recognize strings in dicts, we'll prepend them with 'd'"""
-    res = []
-    for i in elements:
-        if i.startswith('"'):
-            res.append(f"d{i}")
-        else:
-            res.append(i)
-    return res
-
 def coerce(expr: str, type) -> str:
     """Addresses differences in literal syntax due to our selected method of translating types
 
     Optional: We've used a variant record to represent an optional type. This means we can't just
-              use the value or None / equivalent. There is also one edge case for HumanEval 136
-              which is implemented in a non-generic way, but makes that benchmark valid.
+        use the value or None / equivalent. There is also one edge case for HumanEval 136 which is
+        implemented in a non-generic way, but makes that benchmark valid.
+
     Strings: If a string is an argument to our candidate function, or the return type, we can use
-             a regular String. If a string is part of a container like a record or an array
-             for example, we can't just use the String type. For records we could use a
-             discriminated record to define the length of the sting. We've however chosen to just
-             use the Unbounded_String type in these cases. If a string is part of a Dict, we can't
-             use an Unbounded_String as a key, so we've chosen to use the String type for both the
-             key and value in this case.
+        a regular String. If a string is part of a container like a record or an array for example,
+        we can't just use the String type. For records we could use a discriminated record to define
+        the length of the sting. We've however chosen to just use the Unbounded_String type in these
+        cases. If a string is part of a Dict, we can't use an Unbounded_String as a key, so we've
+        chosen to use the String type for both the key and value in this case.
     """
     def coerce_to_option(expr: str) -> str:
         if expr == "None" or expr == "null":
             return "(Valid => False)"
         else:
-            return f"(Valid => True, Value => {expr})"
+            return f"(Valid => True, Value => {make_strings_unbounded(expr)})"
     match expr, type:
+        case expr, ast.Name(id="str"):
+            return make_strings_bounded(expr)
         case expr, ast.Subscript(ast.Name("Optional"), _):
             return coerce_to_option(expr)
-        # This is a special case for just one benchmark (HumanEval_136), which
-        # uses Tuple[Option[int], Option[int]>]. There is something more rigorous
-        # to be done here where we properly coerce things. But I, like the
-        # implementor of the rust translator, do not want to do it
         case expr, ast.Subscript(ast.Name("Tuple"),
                 ast.Tuple([ast.Subscript(ast.Name("Optional")), ast.Subscript(ast.Name("Optional"))], _)):
+            # This is a special case for just one benchmark (HumanEval_136), which
+            # uses Tuple[Option[int], Option[int]>]. There is something more rigorous
+            # to be done here where we properly coerce things. But I, like the
+            # implementor of the rust translator, do not want to do it
             l, r = expr.strip("()").split(", ")
             return f"({coerce_to_option(l)}, {coerce_to_option(r)})"
-        case expr, ast.Name(id="str"):
-            return make_bounded_string(expr)
+        case expr, ast.Subscript(ast.Name("Dict"), slice=ast.Tuple(elts=[ast.Name("str"), ast.Subscript(ast.Name("Optional"))])):
+            # Workaround for mbpp_465, which has an argument of type Dict[str, Optional[str]]
+            expr = expr[1:-1] # Remove the surrounding parentheses
+            kv_pairs = expr.split(", ")
+            for i in range(len(kv_pairs)):
+                pair = kv_pairs[i]
+                k, v = pair.split(" => ")
+                kv_pairs[i] = f"{k} => {coerce_to_option(v)}"
+            return f"[{', '.join(kv_pairs)}]"
         case _:
-            res = make_unbounded_strings(expr)
-            res = make_bounded_strings_for_dicts(res)
-            return res
+            return expr
+        # case _:
+        #     res = make_unbounded_strings(expr)
+        #     res = make_bounded_strings_for_dicts(res)
+        #     return res
 
 def extract_arguments(expr: str) -> List[str]:
     """Given a function call extract a list of the top level arguments. e.g.:
@@ -207,9 +207,14 @@ def extract_arguments(expr: str) -> List[str]:
 
     return arguments
 
-BASE64_PATTERN = re.compile(r"(?<=[^d])\"(?P<b64>(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}={2}))\"")
-BASE64_PATTERN_DICT = re.compile(r"d\"(?P<b64>(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}={2}))\"")
+BASE64_PATTERN = re.compile(r"`(?P<b64>(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}={2}))`")
 
+def create_b64_encoded_string(value: str) -> str:
+    """Convert a string to a base64 encoded string"""
+    utf8_bytes = value.encode("utf-8")
+    base64_bytes = base64.b64encode(utf8_bytes)
+    base64_string = base64_bytes.decode("utf-8")
+    return base64_string
 
 def decode_bounded_string(match) -> str:
     """Decode a base64 encoded string that is surrounded by quotes to a bounded string e.g.:
@@ -231,19 +236,18 @@ def decode_unbounded_string(match) -> str:
     utf8_string = decode_bounded_string(match)
     return f'To_Unbounded_String ({utf8_string})'
 
-def make_bounded_string(expr: str) -> str:
+def make_strings_bounded(expr: str) -> str:
     """Replace all strings in the expr with bounded strings,
     decoding the base64 format in the process"""
+    if expr == "``":
+        return '""'
     return BASE64_PATTERN.sub(decode_bounded_string, expr)
 
-def make_bounded_strings_for_dicts(expr: str) -> str:
-    """Replace all strings prepended by 'd' in the expr with bounded strings,
-    decoding the base64 format in the process"""
-    return BASE64_PATTERN_DICT.sub(decode_bounded_string, expr)
-
-def make_unbounded_strings(expr: str) -> str:
+def make_strings_unbounded(expr: str) -> str:
     """Replace all strings in the expr with unbounded strings,
     decoding the base64 format in the process"""
+    if expr == "``":
+        return '""'
     return BASE64_PATTERN.sub(decode_unbounded_string, expr)
 
 SUBP_NAME_PATTERN = re.compile(r"^(?P<subp>\S+)\s+\(.*\)$")
@@ -252,28 +256,6 @@ def get_subp_name(expr: str) -> str:
     """Get the subprogram name of the lhs expression. Should be Candidate"""
     return SUBP_NAME_PATTERN.match(expr).group("subp")
 
-def create_strings_in_arg(arg: str) -> str:
-    """If an argument is a string, make it bounded, other make it unbounded"""
-    if arg.startswith('"'):
-        return make_bounded_string(arg)
-    res = make_unbounded_strings(arg)
-    res = make_bounded_strings_for_dicts(res)
-    return res
-
-def create_strings_in_lhs(lhs_expr: str) -> str:
-    """This is used to properly format strings in the lhs of a test case.
-
-    Extract all of the top level arguments of the lhs expression. For each
-    top level argument:
-    - If it is a string, convert it to a bounded string
-    - Otherwise extract all strings and convert them to unbounded strings
-    Then rebuild the lhs function call.
-    """
-    subp_name = get_subp_name(lhs_expr)
-    args = extract_arguments(lhs_expr)
-    args = [create_strings_in_arg(x) for x in args]
-    return f"{subp_name} ({', '.join(args)})"
-
 class TranslationDesignError(Exception):
     pass
 
@@ -281,6 +263,35 @@ class HackyFix(Exception):
     pass
 
 class Translator(LanguageTranslator[TargetExp]):
+    """Translator class for Ada 2022
+
+    This class can be used to translate problems from the HumanEval and MBPP datasets into Ada 2022.
+    Note that this translator was crafted with the HumanEval and MBPP datasets in mind, and you may
+    encounter issues with translating prompts from other datasets, even if they appear to use the
+    same types as those supported in the HumanEval and MBPP datasets.
+
+    Types will generally be translated as follows:
+    - int -> Integer
+    - float -> Float
+    - bool -> Boolean
+    - str
+        - String
+            - If the string is an argument to the candidate function or the return type
+            - If the string is a key or value in a Dict
+        - Unbounded_String - Otherwise
+    - Optional -> Ada doesn't have a built in Optional type. We've implemented this as a variant record
+    - None -> This is generally only used as a test value for Optional types. Assuming this is the
+        case, we've translated this as (Valid => False), to match our implementation of Optional
+    - List -> Array
+        - TODO - Since it's not obvious from the typehint whether 2d arrays will use a fixed size,
+            it's not possible to use multi-dimensional ada arrays. We should use arrays of vectors
+            as a work around
+    - Tuple
+        - Mostly translated to a Record
+        - Some edge cases are translated to an Array e.g. HumanEval_148
+    - Dict -> Indefinite_Ordered_Map
+    - Set -> Indefinite_Ordered_Set
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -307,15 +318,25 @@ class Translator(LanguageTranslator[TargetExp]):
         self._imports.add("with Ada.Containers.Ordered_Sets;")
         decl = f"package {type_name} is new Ada.Containers.Ordered_Sets (Element_Type => Integer);\n   use {type_name};"
         self._custom_type_decls.append(decl)
-        return "Set"
+        self._use_statements.add(f"use {type_name};")
+        return f"{type_name}.Set"
 
     def gen_array_type(self, elem_type):
         # TODO handle cases where element isn't a fixed size e.g. strings, unconstrained arrays etc.
         element = self.translate_pytype(elem_type)
-        type_name = f"{element}_Array"
+        type_name = make_valid_ada_name(f"{element}_Array")
         decl = f"type {type_name} is array (Positive range <>) of {element};"
         self._custom_type_decls.append(decl)
         return type_name
+
+    def gen_vector_type(self, elem_type):
+        element = self.translate_pytype(elem_type)
+        type_name = make_valid_ada_name(f"{element}_Vector")
+        self._imports.add("with Ada.Containers.Vectors;")
+        decl = f"package {type_name} is new Ada.Containers.Vectors (Index_Type => Positive, Element_Type => {element});\n   use {type_name};"
+        self._custom_type_decls.append(decl)
+        self._use_statements.add(f"use {type_name};")
+        return f"{type_name}.Vector"
 
     def gen_optional_type(self, elem_type):
         element = self.translate_pytype(elem_type)
@@ -341,7 +362,7 @@ class Translator(LanguageTranslator[TargetExp]):
         # We can't use an Unordered_String as a key in a Map
         key = self.translate_pytype(key_type, True)
         value = self.translate_pytype(value_type, True)
-        type_name = f"{key}_{value}_Dict"
+        type_name = make_valid_ada_name(f"{key}_{value}_Dict")
         self._imports.add("with Ada.Containers.Indefinite_Ordered_Maps;")
         decl = f"package {type_name} is new Ada.Containers.Indefinite_Ordered_Maps (Key_Type => {key}, Element_Type => {value});\n   use {type_name};"
         self._custom_type_decls.append(decl)
@@ -381,7 +402,9 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Subscript(value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)):
                 return self.gen_dict_type(key_val_type[0], key_val_type[1])
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
-                return self.gen_array_type(elem_type)
+                if top_level:
+                    return self.gen_array_type(elem_type)
+                return self.gen_vector_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Tuple"), slice=elts):
                 try:
                     return self.gen_tuple_type(elts.elts)
@@ -419,13 +442,12 @@ class Translator(LanguageTranslator[TargetExp]):
                 Instead we'll just output a string and then later during the call to `finalize`
                 we'll create bounded or unbounded strings where needed.
 
-                We're converting the contents of the string to make it easier to
-                reliably pattern match the start and end of a string."""
+                By formatting the string using b64, and surrounding it by backticks, which aren't
+                used in ada, it makes it easier to identify which strings have or haven't been
+                converted back to strings during the call to `finalize`
+                """
                 string = python_string_to_ada_string(c)
-                utf8_bytes = string.encode("utf-8")
-                base64_bytes = base64.b64encode(utf8_bytes)
-                base64_string = base64_bytes.decode("utf-8")
-                return f'"{base64_string}"'
+                return f'`{create_b64_encoded_string(string)}`'
             case None:
                 return "null"
             case _:
@@ -448,7 +470,7 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a list with elements l
         """
-        return "[" + ", ".join(l) + "]"
+        return "[" + ", ".join([make_strings_unbounded(i) for i in l]) + "]"
 
     def gen_tuple(self, t: List[TargetExp]) -> TargetExp:
         """
@@ -457,22 +479,20 @@ class Translator(LanguageTranslator[TargetExp]):
         if self._humaneval_148_workaround:
             # Workaround for HumanEval_148, in which we're using an array instead
             return self.gen_list(t)
-        return "(" + ", ".join(t) + ")"
+        return "(" + ", ".join([make_strings_unbounded(i) for i in t]) + ")"
 
 
     def gen_dict(self, keys: List[TargetExp], values: List[TargetExp]) -> TargetExp:
         """
         Translate a dictionary with keys and values
         """
-        keys = make_strings_in_dicts_recognizable(keys)
-        values = make_strings_in_dicts_recognizable(values)
-        return "[" + ', '.join([f"{k} => {v}" for k, v in zip(keys, values)]) + "]"
+        return "[" + ', '.join([f"{make_strings_bounded(k)} => {make_strings_bounded(v)}" for k, v in zip(keys, values)]) + "]"
 
     def gen_set(self, s: List[TargetExp]) -> TargetExp:
         """
         Translate a set with elements s
         """
-        return "[" + ", ".join(s) + "]"
+        return "[" + ", ".join([make_strings_unbounded(i) for i in s]) + "]"
 
     def gen_call(self, func: TargetExp, args: List[TargetExp]) -> TargetExp:
         """
@@ -608,10 +628,26 @@ class Translator(LanguageTranslator[TargetExp]):
             raise TranslationDesignError("subprogram_name should never be None")
         return f"raise Program_Error with \"Not implemented\";\n   end {self.subprogram_name};"
 
+    def create_strings_in_lhs(self, lhs_expr: str) -> str:
+        """This is used to properly format strings in the lhs of a test case.
+
+        Extract all of the top level arguments of the lhs expression. For each
+        top level argument:
+        - If it is a string, convert it to a bounded string
+        - Otherwise extract all strings and convert them to unbounded strings
+        Then rebuild the lhs function call.
+        """
+        subp_name = get_subp_name(lhs_expr)
+        args = extract_arguments(lhs_expr)
+        assert len(args) == len(self.type[0])
+        args = [coerce(x, y) for x, y in zip(args, self.type[0])]
+        return f"{subp_name} ({', '.join(args)})"
+
     def finalize(self, result, context) -> str:
         match context:
             case "lhs":
-                return create_strings_in_lhs(result)
+                # return result
+                return self.create_strings_in_lhs(result)
             case "rhs":
                 return coerce(result, self.type[1])
             case _other:

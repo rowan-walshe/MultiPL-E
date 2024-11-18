@@ -1,15 +1,5 @@
 # TODO
 
-Stuff to fix :(
-mbpp_465_drop_empty
-
-Still to check:
-mbpp_237_check_occurences
-mbpp_277_dict_filter
-mbpp_391_convert_list_dictionary
-mbpp_464_check_value
-
-
 ## Already modified
 
 - HumanEval 69 (cleaned-doctests): Removed an extra whitespace that was in one of the doctests
