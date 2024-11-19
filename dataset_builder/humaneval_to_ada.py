@@ -3,19 +3,19 @@ MBPP datasets into Ada 2022.
 
 There are a number of limitations of this script including:
 - Ada does not have a tuple type. We've chosen to use a record in these case,
-  though it doesn't behave the same as a tuple in python
-- There are a few untyped problems, or problems that use a container type but don't
-  specify the type of the contained elements e.g. `List` vs `List[int]`. We can't
-  easily, and so haven't translated these types
+    though it doesn't behave the same as a tuple in python
+- There are a few untyped problems, or problems that use a container type but
+    don't specify the type of the contained elements e.g. `List` vs `List[int]`.
+    We can't easily, and so haven't translated these types
 - It won't translate any problem that uses the type `Any`
 - Ada doesn't have a built in Optional equivalent. You can build your own using
-  a variant record, which is what we've chosen to do. To attempt to translate
-  test cases that use Optional, we have used the same approach and workaround
-  as the humaneval_to_rs.py
+    a variant record, which is what we've chosen to do. To attempt to translate
+    test cases that use Optional, we have used the same approach and workaround
+    as the humaneval_to_rs.py
 - Many of the docstrings won't fully make sense as they will use type names that
-  don't exist in Ada, so the docstrings won't make a whole lot of sense
+    don't exist in Ada, so the docstrings won't make a whole lot of sense
 - It is very likely that some of the translations were generated with invalid
-  types or signatures, making it impossible to pass those benchmarks
+    types or signatures, making it impossible to pass those benchmarks
 
 Note also that these translations won't include examples of a large number of
 Ada feature including but not limited to:
@@ -43,8 +43,6 @@ from base_language_translator import LanguageTranslator
 from humaneval_to_cpp import DOCSTRING_LINESTART_RE
 
 TargetExp = str
-
-ADA_MAIN_NAME = "Main"
 
 ADA_KEYWORDS = {
     "abort",
@@ -241,7 +239,7 @@ def coerce(expr: str, type) -> str:
         case expr, ast.Subscript(ast.Name("Optional"), _):
             return coerce_to_option(expr)
         case expr, ast.Subscript(
-            ast.Name("Tuple"), ast.Tuple([_, ast.Constant(value=Ellipsis)], _)
+            ast.Name("Tuple"), ast.Tuple([_, ast.Constant(value=ast.Ellipsis)], _)
         ):
             return f"[{expr[1:-1]}]"  # Replace parentheses with square brackets
         case expr, ast.Subscript(
@@ -494,8 +492,8 @@ class Translator(LanguageTranslator[TargetExp]):
     def translate_pytype(self, ann: ast.expr | None, top_level: bool = False) -> str:
         """Traverses an AST annotation and translate Python type annotation to an Ada Type"""
 
-        if ann == None:
-            raise Exception(f"No annotation")
+        if ann is None:
+            raise Exception("No annotation")
 
         # Todo add missing Set type
         match ann:
@@ -517,11 +515,11 @@ class Translator(LanguageTranslator[TargetExp]):
                 raise Exception("None type not implemented")
             case ast.Name(id="Set"):
                 raise Exception("Set without defined element type not implemented")
-            case ast.List(elts=elts):
+            case ast.List:
                 raise Exception("List without defined element type not implemented")
-            case ast.Tuple(elts=elts):
+            case ast.Tuple:
                 raise Exception("Tuple not implemented")
-            case ast.Dict(keys=k, values=v):
+            case ast.Dict:
                 raise Exception(
                     "Dict without defined key and value types not implemented"
                 )
@@ -553,11 +551,11 @@ class Translator(LanguageTranslator[TargetExp]):
                 raise Exception("Any type not implemented")
             case ast.Constant(value=None):
                 raise Exception("None constant type not implemented")
-            case ast.Constant(value=Ellipsis):
+            case ast.Constant(value=ast.Ellipsis):
                 raise Exception(
                     "Ellipsis constant type not implemented, other than the tuple workaround"
                 )
-            case _other:
+            case _:
                 print(f"Unhandled annotation: {ast.dump(ann)}")
                 raise Exception(f"Unhandled annotation: {ann}")
 
@@ -649,7 +647,6 @@ class Translator(LanguageTranslator[TargetExp]):
         self.reinit()
         self.type = [[arg.annotation for arg in args], returns]
 
-        main_decl = f"procedure {ADA_MAIN_NAME} is\n\n"
         comment_start = self.indent + "-- "
         ada_description = (
             comment_start
@@ -728,7 +725,7 @@ class Translator(LanguageTranslator[TargetExp]):
             self.package_imports().strip(),
             "with Placeholder; use Placeholder;",
             "",
-            f"procedure Main is",
+            "procedure Main is",
             "",
             *[f"{self.indent}{use}" for use in self._use_statements],
             "",
@@ -741,7 +738,7 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         This code goes at the end of the test suite.
         """
-        return [f"end Main;"]
+        return ["end Main;"]
 
     def deep_equality(self, left: TargetExp, right: TargetExp) -> str:
         """
@@ -798,5 +795,5 @@ class Translator(LanguageTranslator[TargetExp]):
                 return self.create_strings_in_lhs(result)
             case "rhs":
                 return coerce(result, self.type[1])
-            case _other:
+            case _:
                 raise Exception("bad context to finalize")
