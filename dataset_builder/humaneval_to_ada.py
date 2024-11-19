@@ -34,10 +34,10 @@ Ada feature including but not limited to:
 
 """
 
-from typing import List
 import ast
 import base64
 import re
+from typing import List
 
 from base_language_translator import LanguageTranslator
 from humaneval_to_cpp import DOCSTRING_LINESTART_RE
@@ -46,8 +46,96 @@ TargetExp = str
 
 ADA_MAIN_NAME = "Main"
 
-ADA_KEYWORDS = {"abort", "abs", "abstract", "accept", "access", "aliased", "all", "and", "array", "at", "begin", "body", "case", "constant", "declare", "delay", "delta", "digits", "do", "else", "elsif", "end", "entry", "exception", "exit", "for", "function", "generic", "goto", "if", "in", "interface", "is", "limited", "loop", "mod", "new", "not", "null", "of", "or", "others", "out", "overriding", "package", "pragma", "private", "procedure", "protected", "raise", "range", "record", "rem", "renames", "requeue", "return", "reverse", "select", "separate", "some", "subtype", "synchronized", "tagged", "task", "terminate", "then", "type", "until", "use", "when", "while", "with", "xor",}
-STANDARD_LIBRARY_TYPES = {"boolean", "integer", "short_short_integer", "short_integer", "long_integer", "long_long_integer", "short_float", "float", "long_float", "long_long_float", "string", "wide_string", "duration",}
+ADA_KEYWORDS = {
+    "abort",
+    "abs",
+    "abstract",
+    "accept",
+    "access",
+    "aliased",
+    "all",
+    "and",
+    "array",
+    "at",
+    "begin",
+    "body",
+    "case",
+    "constant",
+    "declare",
+    "delay",
+    "delta",
+    "digits",
+    "do",
+    "else",
+    "elsif",
+    "end",
+    "entry",
+    "exception",
+    "exit",
+    "for",
+    "function",
+    "generic",
+    "goto",
+    "if",
+    "in",
+    "interface",
+    "is",
+    "limited",
+    "loop",
+    "mod",
+    "new",
+    "not",
+    "null",
+    "of",
+    "or",
+    "others",
+    "out",
+    "overriding",
+    "package",
+    "pragma",
+    "private",
+    "procedure",
+    "protected",
+    "raise",
+    "range",
+    "record",
+    "rem",
+    "renames",
+    "requeue",
+    "return",
+    "reverse",
+    "select",
+    "separate",
+    "some",
+    "subtype",
+    "synchronized",
+    "tagged",
+    "task",
+    "terminate",
+    "then",
+    "type",
+    "until",
+    "use",
+    "when",
+    "while",
+    "with",
+    "xor",
+}
+STANDARD_LIBRARY_TYPES = {
+    "boolean",
+    "integer",
+    "short_short_integer",
+    "short_integer",
+    "long_integer",
+    "long_long_integer",
+    "short_float",
+    "float",
+    "long_float",
+    "long_long_float",
+    "string",
+    "wide_string",
+    "duration",
+}
 
 # These types might be generated, but are not valid. For now we'll just fail to
 # translate prompts that try to generate these types
@@ -93,19 +181,22 @@ ASCII_CHARACTERS = {
     "\x7f": "ASCII.DEL",
 }
 
-CAMEL_REGEX_1 = re.compile('(.)([A-Z][a-z]+)')
-CAMEL_REGEX_2 = re.compile('__([A-Z])')
-CAMEL_REGEX_3 = re.compile('([a-z0-9])([A-Z])')
+CAMEL_REGEX_1 = re.compile("(.)([A-Z][a-z]+)")
+CAMEL_REGEX_2 = re.compile("__([A-Z])")
+CAMEL_REGEX_3 = re.compile("([a-z0-9])([A-Z])")
+
 
 def camel_to_snake(name: str) -> str:
     # Taken from: https://stackoverflow.com/a/1176023
-    name = CAMEL_REGEX_1.sub(r'\1_\2', name)
-    name = CAMEL_REGEX_2.sub(r'_\1', name)
-    name = CAMEL_REGEX_3.sub(r'\1_\2', name)
+    name = CAMEL_REGEX_1.sub(r"\1_\2", name)
+    name = CAMEL_REGEX_2.sub(r"_\1", name)
+    name = CAMEL_REGEX_3.sub(r"\1_\2", name)
     return name.lower()
+
 
 def ada_case(name: str) -> str:
     return camel_to_snake(name).title()
+
 
 def python_string_to_ada_string(s: str) -> str:
     # TODO figure out what to do with UTF-8 🙈
@@ -114,12 +205,14 @@ def python_string_to_ada_string(s: str) -> str:
         s.replace(c, f'" & {ASCII_CHARACTERS[c]} & "')
     return s
 
+
 def make_valid_ada_name(name: str) -> str:
     """Make a valid Ada name from a string.
     This is a very simple implementation, and almost certainly not correct for
     all cases, but should be sufficient for our purposes. Replaces all non-word
     characters with underscores."""
-    return re.sub(r'\W', '_', name)
+    return re.sub(r"\W", "_", name)
+
 
 def coerce(expr: str, type) -> str:
     """Addresses differences in literal syntax due to our selected method of translating types
@@ -135,29 +228,46 @@ def coerce(expr: str, type) -> str:
         cases. If a string is part of a Dict, we can't use an Unbounded_String as a key, so we've
         chosen to use the String type for both the key and value in this case.
     """
+
     def coerce_to_option(expr: str) -> str:
         if expr == "None" or expr == "null":
             return "(Valid => False)"
         else:
             return f"(Valid => True, Value => {make_strings_unbounded(expr)})"
+
     match expr, type:
         case expr, ast.Name(id="str"):
             return make_strings_bounded(expr)
         case expr, ast.Subscript(ast.Name("Optional"), _):
             return coerce_to_option(expr)
-        case expr, ast.Subscript(ast.Name("Tuple"), ast.Tuple([_, ast.Constant(value=Ellipsis)], _)):
+        case expr, ast.Subscript(
+            ast.Name("Tuple"), ast.Tuple([_, ast.Constant(value=Ellipsis)], _)
+        ):
             return f"[{expr[1:-1]}]"  # Replace parentheses with square brackets
-        case expr, ast.Subscript(ast.Name("Tuple"),
-                ast.Tuple([ast.Subscript(ast.Name("Optional")), ast.Subscript(ast.Name("Optional"))], _)):
+        case expr, ast.Subscript(
+            ast.Name("Tuple"),
+            ast.Tuple(
+                [
+                    ast.Subscript(ast.Name("Optional")),
+                    ast.Subscript(ast.Name("Optional")),
+                ],
+                _,
+            ),
+        ):
             # This is a special case for just one benchmark (HumanEval_136), which
             # uses Tuple[Option[int], Option[int]]. There is something more rigorous
             # to be done here where we properly coerce things. But I, like the
             # implementor of the rust translator, do not want to do it
             l, r = expr.strip("()").split(", ")
             return f"({coerce_to_option(l)}, {coerce_to_option(r)})"
-        case expr, ast.Subscript(ast.Name("Dict"), slice=ast.Tuple(elts=[ast.Name("str"), ast.Subscript(ast.Name("Optional"))])):
+        case expr, ast.Subscript(
+            ast.Name("Dict"),
+            slice=ast.Tuple(
+                elts=[ast.Name("str"), ast.Subscript(ast.Name("Optional"))]
+            ),
+        ):
             # Workaround for mbpp_465, which has an argument of type Dict[str, Optional[str]]
-            expr = expr[1:-1] # Remove the surrounding parentheses
+            expr = expr[1:-1]  # Remove the surrounding parentheses
             kv_pairs = expr.split(", ")
             for i in range(len(kv_pairs)):
                 pair = kv_pairs[i]
@@ -167,6 +277,7 @@ def coerce(expr: str, type) -> str:
         case _:
             return expr
 
+
 def extract_arguments(expr: str) -> List[str]:
     """Given a function call extract a list of the top level arguments. e.g.:
     - "Candidate (1, 2, 3)" -> ['1', '2', '3']
@@ -175,8 +286,8 @@ def extract_arguments(expr: str) -> List[str]:
     Assumes that expr has arguments, which is the case for HumanEval and MBPP.
     """
     # Remove the function name and parentheses
-    start = expr.index('(') + 1
-    end = expr.rindex(')')
+    start = expr.index("(") + 1
+    end = expr.rindex(")")
     arguments_str = expr[start:end].strip()
 
     arguments = []
@@ -185,27 +296,31 @@ def extract_arguments(expr: str) -> List[str]:
     in_string = False
 
     for char in arguments_str:
-        if char == ',' and not in_string and nested_level == 0:
+        if char == "," and not in_string and nested_level == 0:
             # When we encounter a comma at the top level, split the argument
-            arguments.append(''.join(current_arg).strip())
+            arguments.append("".join(current_arg).strip())
             current_arg = []
         else:
             current_arg.append(char)
             # Handle nested parentheses
             if char == '"':
                 in_string = not in_string
-            elif not in_string and char in ['(', '[']:
+            elif not in_string and char in ["(", "["]:
                 nested_level += 1
-            elif not in_string and char in [')', ']']:
+            elif not in_string and char in [")", "]"]:
                 nested_level -= 1
 
     # Append the last argument
     if current_arg:
-        arguments.append(''.join(current_arg).strip())
+        arguments.append("".join(current_arg).strip())
 
     return arguments
 
-BASE64_PATTERN = re.compile(r"`(?P<b64>(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}={2}))`")
+
+BASE64_PATTERN = re.compile(
+    r"`(?P<b64>(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}={2}))`"
+)
+
 
 def create_b64_encoded_string(value: str) -> str:
     """Convert a string to a base64 encoded string"""
@@ -213,6 +328,7 @@ def create_b64_encoded_string(value: str) -> str:
     base64_bytes = base64.b64encode(utf8_bytes)
     base64_string = base64_bytes.decode("utf-8")
     return base64_string
+
 
 def decode_bounded_string(match) -> str:
     """Decode a base64 encoded string that is surrounded by quotes to a bounded string e.g.:
@@ -225,6 +341,7 @@ def decode_bounded_string(match) -> str:
     utf8_string = utf8_bytes.decode("utf-8")
     return f'"{utf8_string}"'
 
+
 def decode_unbounded_string(match) -> str:
     """Decode a base64 encoded string that is surrounded by quotes to an unbounded string e.g.:
     - '""' -> 'To_Unbounded_String ("")'
@@ -232,7 +349,8 @@ def decode_unbounded_string(match) -> str:
     - '"Zm9vIiJiYXI="' => 'To_Unbounded_String ("foo""bar")'
     """
     utf8_string = decode_bounded_string(match)
-    return f'To_Unbounded_String ({utf8_string})'
+    return f"To_Unbounded_String ({utf8_string})"
+
 
 def make_strings_bounded(expr: str) -> str:
     """Replace all strings in the expr with bounded strings,
@@ -241,6 +359,7 @@ def make_strings_bounded(expr: str) -> str:
         return '""'
     return BASE64_PATTERN.sub(decode_bounded_string, expr)
 
+
 def make_strings_unbounded(expr: str) -> str:
     """Replace all strings in the expr with unbounded strings,
     decoding the base64 format in the process"""
@@ -248,11 +367,14 @@ def make_strings_unbounded(expr: str) -> str:
         return '""'
     return BASE64_PATTERN.sub(decode_unbounded_string, expr)
 
+
 SUBP_NAME_PATTERN = re.compile(r"^(?P<subp>\S+)\s+\(.*\)$")
+
 
 def get_subp_name(expr: str) -> str:
     """Get the subprogram name of the lhs expression. Should be Candidate"""
     return SUBP_NAME_PATTERN.match(expr).group("subp")
+
 
 class TranslationDesignError(Exception):
     pass
@@ -296,7 +418,7 @@ class Translator(LanguageTranslator[TargetExp]):
         self.int_type = "Integer"
         self.bool_type = "Boolean"
         self.array_type = "Array"
-        self.indent = ' ' * 3
+        self.indent = " " * 3
         self._custom_type_decls = []
         self._use_statements = set()
 
@@ -311,7 +433,9 @@ class Translator(LanguageTranslator[TargetExp]):
         element = self.translate_pytype(elem_type)
         if element == "Integer_Integer_Tuple":
             # Workaround for MBPP_473, as we need a < operator for type to be able to use an ordered set
-            self._custom_type_decls.append('function "<" (Left, Right : Integer_Integer_Tuple) return Boolean is\n    (Left.Integer_1 < Right.Integer_1 or else (Left.Integer_1 = Right.Integer_1 and then Left.Integer_2 < Right.Integer_2));')
+            self._custom_type_decls.append(
+                'function "<" (Left, Right : Integer_Integer_Tuple) return Boolean is\n    (Left.Integer_1 < Right.Integer_1 or else (Left.Integer_1 = Right.Integer_1 and then Left.Integer_2 < Right.Integer_2));'
+            )
         type_name = make_valid_ada_name(f"{element}_Sets")
         self._imports.add("with Ada.Containers.Ordered_Sets;")
         decl = f"package {type_name} is new Ada.Containers.Ordered_Sets (Element_Type => {element});\n   use {type_name};"
@@ -378,7 +502,9 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Name(id="str"):
                 if top_level:
                     return "String"
-                self._imports.add("with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;")
+                self._imports.add(
+                    "with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;"
+                )
                 return "Unbounded_String"
             case ast.Name(id="int"):
                 return self.int_type
@@ -387,7 +513,7 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Name(id="bool"):
                 return self.bool_type
             case ast.Name(id="None"):
-                #It appears None is always used in optional
+                # It appears None is always used in optional
                 raise Exception("None type not implemented")
             case ast.Name(id="Set"):
                 raise Exception("Set without defined element type not implemented")
@@ -395,15 +521,22 @@ class Translator(LanguageTranslator[TargetExp]):
                 raise Exception("List without defined element type not implemented")
             case ast.Tuple(elts=elts):
                 raise Exception("Tuple not implemented")
-            case ast.Dict(keys=k,values=v):
-                raise Exception("Dict without defined key and value types not implemented")
-            case ast.Subscript(value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)):
+            case ast.Dict(keys=k, values=v):
+                raise Exception(
+                    "Dict without defined key and value types not implemented"
+                )
+            case ast.Subscript(
+                value=ast.Name(id="Dict"), slice=ast.Tuple(elts=key_val_type)
+            ):
                 return self.gen_dict_type(key_val_type[0], key_val_type[1])
             case ast.Subscript(value=ast.Name(id="List"), slice=elem_type):
                 if top_level:
                     return self.gen_array_type(elem_type)
                 return self.gen_vector_type(elem_type)
-            case ast.Subscript(value=ast.Name(id="Tuple"), slice=ast.Tuple([elem_type, ast.Constant(value=Ellipsis)], _)):
+            case ast.Subscript(
+                value=ast.Name(id="Tuple"),
+                slice=ast.Tuple([elem_type, ast.Constant(value=Ellipsis)], _),
+            ):
                 # Special case for when we have a variable length tuple with a typehint like Tuple[int, ...] e.g. HumanEval_148
                 if top_level:
                     return self.gen_array_type(elem_type)
@@ -421,7 +554,9 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Constant(value=None):
                 raise Exception("None constant type not implemented")
             case ast.Constant(value=Ellipsis):
-                raise Exception("Ellipsis constant type not implemented, other than the tuple workaround")
+                raise Exception(
+                    "Ellipsis constant type not implemented, other than the tuple workaround"
+                )
             case _other:
                 print(f"Unhandled annotation: {ast.dump(ann)}")
                 raise Exception(f"Unhandled annotation: {ann}")
@@ -444,12 +579,11 @@ class Translator(LanguageTranslator[TargetExp]):
                 converted back to strings during the call to `finalize`
                 """
                 string = python_string_to_ada_string(c)
-                return f'`{create_b64_encoded_string(string)}`'
+                return f"`{create_b64_encoded_string(string)}`"
             case None:
                 return "null"
             case _:
                 raise TranslationDesignError(f"Unhandled expression: {c}")
-
 
     def gen_var(self, v: str) -> TargetExp:
         """
@@ -475,12 +609,20 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         return "(" + ", ".join([make_strings_unbounded(i) for i in t]) + ")"
 
-
     def gen_dict(self, keys: List[TargetExp], values: List[TargetExp]) -> TargetExp:
         """
         Translate a dictionary with keys and values
         """
-        return "[" + ', '.join([f"{make_strings_bounded(k)} => {make_strings_bounded(v)}" for k, v in zip(keys, values)]) + "]"
+        return (
+            "["
+            + ", ".join(
+                [
+                    f"{make_strings_bounded(k)} => {make_strings_bounded(v)}"
+                    for k, v in zip(keys, values)
+                ]
+            )
+            + "]"
+        )
 
     def gen_set(self, s: List[TargetExp]) -> TargetExp:
         """
@@ -496,12 +638,11 @@ class Translator(LanguageTranslator[TargetExp]):
 
     def package_imports(self) -> str:
         # TODO handle cases where more imports are needed e.g. vector/hashmap
-        return '\n'.join([
-            "pragma Ada_2022;",
-            *self._imports
-        ]) + '\n'
+        return "\n".join(["pragma Ada_2022;", *self._imports]) + "\n"
 
-    def translate_prompt(self, name: str, args: List[ast.arg], returns: ast.expr, description: str) -> str:
+    def translate_prompt(
+        self, name: str, args: List[ast.arg], returns: ast.expr, description: str
+    ) -> str:
         """
         Translate Python prompt.
         """
@@ -509,21 +650,32 @@ class Translator(LanguageTranslator[TargetExp]):
         self.type = [[arg.annotation for arg in args], returns]
 
         main_decl = f"procedure {ADA_MAIN_NAME} is\n\n"
-        comment_start = self.indent + '-- '
+        comment_start = self.indent + "-- "
         ada_description = (
-            comment_start + DOCSTRING_LINESTART_RE.sub("\n" + comment_start, description.strip()) + "\n"
+            comment_start
+            + DOCSTRING_LINESTART_RE.sub("\n" + comment_start, description.strip())
+            + "\n"
         )
         self.subprogram_name = ada_case(name)
         self.subprogram_type = "function"  # Will always use function as all subprograms in MBPP and HumanEval have return types
         self.args_type = [self.translate_pytype(arg.annotation, True) for arg in args]
-        formal_args = [f"{self.gen_var(arg.arg)} : {self.translate_pytype(arg.annotation, True)}" for arg in args]
+        formal_args = [
+            f"{self.gen_var(arg.arg)} : {self.translate_pytype(arg.annotation, True)}"
+            for arg in args
+        ]
         formal_arg_list = "; ".join(formal_args)
         self.return_type = self.translate_pytype(returns, True)
-        subprogram_signature = f"{self.subprogram_type} {self.subprogram_name} ({formal_arg_list})"
-        self.candidate_signature = f"{self.subprogram_type} Candidate ({formal_arg_list})"
+        subprogram_signature = (
+            f"{self.subprogram_type} {self.subprogram_name} ({formal_arg_list})"
+        )
+        self.candidate_signature = (
+            f"{self.subprogram_type} Candidate ({formal_arg_list})"
+        )
         if self.subprogram_type == "function":
             subprogram_signature = f"{subprogram_signature} return {self.return_type}"
-            self.candidate_signature = f"{self.candidate_signature} return {self.return_type}"
+            self.candidate_signature = (
+                f"{self.candidate_signature} return {self.return_type}"
+            )
 
         # To be able to use custom types such as arrays of integers, the prompt
         # starts with the specification of a "Placeholder" pacakge where we
@@ -541,7 +693,9 @@ class Translator(LanguageTranslator[TargetExp]):
         for custom_type in set(self._custom_type_decls):
             for invalid_type in INVALID_TYPES:
                 if invalid_type in custom_type:
-                    raise TranslationDesignError(f'Tried to generate invalid type: "{custom_type}"')
+                    raise TranslationDesignError(
+                        f'Tried to generate invalid type: "{custom_type}"'
+                    )
 
         ada_spec = f"{self.package_imports()}\n"
         ada_spec += "package Placeholder is\n"
@@ -566,22 +720,22 @@ class Translator(LanguageTranslator[TargetExp]):
         The entry_point is ???
         """
         return [
-                "",
-                f"{self.indent}end {self.subprogram_name};",
-                "",
-                "end Placeholder;",
-                "",
-                self.package_imports().strip(),
-                "with Placeholder; use Placeholder;",
-                "",
-                f"procedure Main is",
-                "",
-                *[f"{self.indent}{use}" for use in self._use_statements],
-                "",
-                f"{self.indent}{self.candidate_signature} renames Placeholder.{self.subprogram_name};",
-                "",
-                "begin"
-            ]
+            "",
+            f"{self.indent}end {self.subprogram_name};",
+            "",
+            "end Placeholder;",
+            "",
+            self.package_imports().strip(),
+            "with Placeholder; use Placeholder;",
+            "",
+            f"procedure Main is",
+            "",
+            *[f"{self.indent}{use}" for use in self._use_statements],
+            "",
+            f"{self.indent}{self.candidate_signature} renames Placeholder.{self.subprogram_name};",
+            "",
+            "begin",
+        ]
 
     def test_suite_suffix_lines(self) -> List[str]:
         """
@@ -620,7 +774,7 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         if self.subprogram_name is None:
             raise TranslationDesignError("subprogram_name should never be None")
-        return f"raise Program_Error with \"Not implemented\";\n   end {self.subprogram_name};"
+        return f'raise Program_Error with "Not implemented";\n   end {self.subprogram_name};'
 
     def create_strings_in_lhs(self, lhs_expr: str) -> str:
         """This is used to properly format strings in the lhs of a test case.
