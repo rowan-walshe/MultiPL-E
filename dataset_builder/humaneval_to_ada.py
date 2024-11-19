@@ -309,9 +309,12 @@ class Translator(LanguageTranslator[TargetExp]):
     def gen_set_type(self, elem_type):
         # Probably won't work complex examples, but there is only one "valid" problem that uses set in MBPP and HumanEval
         element = self.translate_pytype(elem_type)
-        type_name = f"{element}_Sets"
+        if element == "Integer_Integer_Tuple":
+            # Workaround for MBPP_473, as we need a < operator for type to be able to use an ordered set
+            self._custom_type_decls.append('function "<" (Left, Right : Integer_Integer_Tuple) return Boolean is\n    (Left.Integer_1 < Right.Integer_1 or else (Left.Integer_1 = Right.Integer_1 and then Left.Integer_2 < Right.Integer_2));')
+        type_name = make_valid_ada_name(f"{element}_Sets")
         self._imports.add("with Ada.Containers.Ordered_Sets;")
-        decl = f"package {type_name} is new Ada.Containers.Ordered_Sets (Element_Type => Integer);\n   use {type_name};"
+        decl = f"package {type_name} is new Ada.Containers.Ordered_Sets (Element_Type => {element});\n   use {type_name};"
         self._custom_type_decls.append(decl)
         self._use_statements.add(f"use {type_name};")
         return f"{type_name}.Set"
@@ -347,7 +350,7 @@ class Translator(LanguageTranslator[TargetExp]):
         decl = f"type {type_name} is record\n"
         count = 1
         for elt in element_types:
-            decl += f"     {make_valid_ada_name(elt)}_{count} : {elt};\n"
+            decl += f"      {make_valid_ada_name(elt)}_{count} : {elt};\n"
             count += 1
         decl += "   end record;\n"
         self._custom_type_decls.append(decl)
