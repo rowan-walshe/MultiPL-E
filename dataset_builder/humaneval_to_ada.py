@@ -145,10 +145,12 @@ def coerce(expr: str, type) -> str:
             return make_strings_bounded(expr)
         case expr, ast.Subscript(ast.Name("Optional"), _):
             return coerce_to_option(expr)
+        case expr, ast.Subscript(ast.Name("Tuple"), ast.Tuple([_, ast.Constant(value=Ellipsis)], _)):
+            return f"[{expr[1:-1]}]"  # Replace parentheses with square brackets
         case expr, ast.Subscript(ast.Name("Tuple"),
                 ast.Tuple([ast.Subscript(ast.Name("Optional")), ast.Subscript(ast.Name("Optional"))], _)):
             # This is a special case for just one benchmark (HumanEval_136), which
-            # uses Tuple[Option[int], Option[int]>]. There is something more rigorous
+            # uses Tuple[Option[int], Option[int]]. There is something more rigorous
             # to be done here where we properly coerce things. But I, like the
             # implementor of the rust translator, do not want to do it
             l, r = expr.strip("()").split(", ")
@@ -164,10 +166,6 @@ def coerce(expr: str, type) -> str:
             return f"[{', '.join(kv_pairs)}]"
         case _:
             return expr
-        # case _:
-        #     res = make_unbounded_strings(expr)
-        #     res = make_bounded_strings_for_dicts(res)
-        #     return res
 
 def extract_arguments(expr: str) -> List[str]:
     """Given a function call extract a list of the top level arguments. e.g.:
@@ -259,8 +257,6 @@ def get_subp_name(expr: str) -> str:
 class TranslationDesignError(Exception):
     pass
 
-class HackyFix(Exception):
-    pass
 
 class Translator(LanguageTranslator[TargetExp]):
     """Translator class for Ada 2022
@@ -309,7 +305,6 @@ class Translator(LanguageTranslator[TargetExp]):
         self._custom_type_decls = []
         self._use_statements = set()
         self._imports = set()
-        self._humaneval_148_workaround = False
 
     def gen_set_type(self, elem_type):
         # Probably won't work complex examples, but there is only one "valid" problem that uses set in MBPP and HumanEval
@@ -405,12 +400,13 @@ class Translator(LanguageTranslator[TargetExp]):
                 if top_level:
                     return self.gen_array_type(elem_type)
                 return self.gen_vector_type(elem_type)
-            case ast.Subscript(value=ast.Name(id="Tuple"), slice=elts):
-                try:
-                    return self.gen_tuple_type(elts.elts)
-                except HackyFix:
-                    self._humaneval_148_workaround = True
-                    return self.gen_array_type(elts.elts[0])
+            case ast.Subscript(value=ast.Name(id="Tuple"), slice=ast.Tuple([elem_type, ast.Constant(value=Ellipsis)], _)):
+                # Special case for when we have a variable length tuple with a typehint like Tuple[int, ...] e.g. HumanEval_148
+                if top_level:
+                    return self.gen_array_type(elem_type)
+                return self.gen_vector_type(elem_type)
+            case ast.Subscript(value=ast.Name(id="Tuple"), slice=ast.Tuple(elts=elems)):
+                return self.gen_tuple_type(elems)
             case ast.Subscript(value=ast.Name(id="Optional"), slice=elem_type):
                 return self.gen_optional_type(elem_type)
             case ast.Subscript(value=ast.Name(id="Union"), slice=ast.Tuple(elts=elems)):
@@ -422,9 +418,7 @@ class Translator(LanguageTranslator[TargetExp]):
             case ast.Constant(value=None):
                 raise Exception("None constant type not implemented")
             case ast.Constant(value=Ellipsis):
-                """Only one test case has this type, HumanEval_148. We can
-                fix this in a hacky way by just using an array type instead"""
-                raise HackyFix("TODO figure out a less hacky fix")
+                raise Exception("Ellipsis constant type not implemented, other than the tuple workaround")
             case _other:
                 print(f"Unhandled annotation: {ast.dump(ann)}")
                 raise Exception(f"Unhandled annotation: {ann}")
@@ -476,9 +470,6 @@ class Translator(LanguageTranslator[TargetExp]):
         """
         Translate a tuple with elements t
         """
-        if self._humaneval_148_workaround:
-            # Workaround for HumanEval_148, in which we're using an array instead
-            return self.gen_list(t)
         return "(" + ", ".join([make_strings_unbounded(i) for i in t]) + ")"
 
 
